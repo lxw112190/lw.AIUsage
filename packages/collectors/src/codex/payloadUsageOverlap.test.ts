@@ -24,6 +24,21 @@ const payload = (index: number, timestamp: number, input: number, ids: Record<st
   resolvedSessionId: "session",
   source: "payload-usage",
 });
+const rawPayload = (
+  index: number,
+  timestamp: number,
+  usage: Record<string, unknown>,
+  resolvedModel: string | undefined,
+): CodexExtractedEvent => ({
+  raw: { type: "response.completed", timestamp, payload: { usage } },
+  eventIndex: index,
+  eventType: "response.completed",
+  semanticType: "response.completed",
+  isTokenCount: false,
+  resolvedModel,
+  resolvedSessionId: "session",
+  source: "payload-usage",
+});
 const totalToken = (index: number, timestamp: number, input: number): CodexExtractedEvent => ({
   raw: { type: "token_count", timestamp, payload: { model: "gpt-5", info: { total_token_usage: counters(input) } } },
   eventIndex: index,
@@ -108,6 +123,19 @@ describe("Codex payload usage overlap", () => {
     expect(report.payloadUniverseTokenInvariant).toBe(true);
   });
 
+  it("applies the parser-v4 payload gate without treating shadowed usage as eligible", () => {
+    const report = auditCodexPayloadUsageOverlap([file([
+      rawPayload(0, 1_700_000_000_000, counters(100), undefined),
+      rawPayload(1, 1_700_000_001_000, { cache_creation_input_tokens: 50 }, "gpt-5"),
+    ])]);
+
+    expect(report.payloadUniverse.observed).toEqual({ events: 2, tokens: 150 });
+    expect(report.payloadUniverse.parserV4Eligible).toEqual({ events: 0, tokens: 0 });
+    expect(report.payloadUniverse.shadowedByHigherPriority).toEqual({ events: 2, tokens: 150 });
+    expect(report.payloadUniverseEventInvariant).toBe(true);
+    expect(report.payloadUniverseTokenInvariant).toBe(true);
+  });
+
   it("is independent of payload order and lets strong evidence win first", () => {
     const token = tokenCountWithResponse("r-strong");
     const weak = payload(1, 1_700_000_000_500, 100);
@@ -138,6 +166,43 @@ describe("Codex payload usage overlap", () => {
     ])]);
     expect(narrowed.duplicateClassification.confirmed.events).toBe(1);
     expect(narrowed.duplicateClassification.confirmed.tokens).toBe(100);
+  });
+
+  it("allows later evidence to narrow a strong candidate domain", () => {
+    const report = auditCodexPayloadUsageOverlap([file([
+      token(0, 1_700_000_000_000, 90, { response_id: "r-domain", turn_id: "t-domain" }),
+      token(1, 1_700_000_000_001, 110, { response_id: "r-domain", turn_id: "t-other" }),
+      payload(2, 1_700_000_000_002, 100, { response_id: "r-domain", turn_id: "t-domain" }),
+    ])]);
+
+    expect(report.linkSummary.probable).toEqual({ events: 1, tokens: 100 });
+    expect(report.samples[0]?.evidence).toBe("same-turn-id");
+    expect(report.samples[0]?.linkConfidence).toBe("probable");
+  });
+
+  it("does not let weak evidence escape a strong ambiguous candidate domain", () => {
+    const report = auditCodexPayloadUsageOverlap([file([
+      token(0, 1_700_000_000_000, 90, { response_id: "r-ambiguous" }),
+      token(1, 1_700_000_000_001, 110, { response_id: "r-ambiguous" }),
+      token(2, 1_700_000_000_002, 95, { response_id: "r-other" }, 5),
+      payload(3, 1_700_000_000_003, 100, { response_id: "r-ambiguous" }),
+    ])]);
+
+    expect(report.duplicateClassification.ambiguous).toEqual({ events: 1, tokens: 100 });
+    expect(report.samples[0]?.evidence).toBe("same-response-id");
+    expect(report.samples[0]?.linkConfidence).toBe("ambiguous");
+  });
+
+  it("classifies a weak multi-candidate match as ambiguous", () => {
+    const report = auditCodexPayloadUsageOverlap([file([
+      token(0, 1_700_000_000_000, 90, {}, 10),
+      token(1, 1_700_000_000_001, 80, {}, 20),
+      payload(2, 1_700_000_000_002, 100),
+    ])]);
+
+    expect(report.duplicateClassification.ambiguous).toEqual({ events: 1, tokens: 100 });
+    expect(report.linkSummary.ambiguous).toEqual({ events: 1, tokens: 100 });
+    expect(report.samples[0]?.evidence).toBe("same-total-near-time");
   });
 });
 

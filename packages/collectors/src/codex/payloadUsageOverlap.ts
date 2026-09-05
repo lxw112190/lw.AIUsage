@@ -187,6 +187,25 @@ const rawCountersWithPresence = (value: unknown): CodexRawCounters | undefined =
   return rawCountersFrom(value) ?? zeroRawCounters();
 };
 
+const hasUsageFieldsV4ForAudit = (value: unknown): boolean => {
+  const object = objectValue(value);
+  return !!object && [
+    "input_tokens",
+    "inputTokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "outputTokens",
+    "total_tokens",
+    "totalTokens",
+    "reasoning_output_tokens",
+  ].some((key) => key in object);
+};
+
+const isPayloadParserV4Eligible = (
+  event: CodexExtractedEvent,
+  payloadNode: unknown,
+): boolean => event.source === "payload-usage" && !!event.resolvedModel && hasUsageFieldsV4ForAudit(payloadNode);
+
 const timestampOf = (event: CodexExtractedEvent): number | undefined => {
   const value = event.raw.timestamp;
   if (typeof value === "number" && Number.isFinite(value))
@@ -293,7 +312,8 @@ export function collectCodexUsageEventRefs(files: readonly CodexExtractedFile[])
     for (const event of file.events) {
       const payload = payloadOf(event);
       const payloadNode = objectValue(payload.usage);
-      const payloadRef = refOf(file, event, "payload-usage", payloadNode, rawCountersWithPresence(payloadNode), event.source === "payload-usage");
+      const parserV4Eligible = isPayloadParserV4Eligible(event, payloadNode);
+      const payloadRef = refOf(file, event, "payload-usage", payloadNode, rawCountersWithPresence(payloadNode), parserV4Eligible);
       if (payloadRef) payloadUsage.push(payloadRef);
     }
   }
@@ -336,7 +356,7 @@ interface MatchPass {
   evidence: PayloadLinkEvidence;
   confidence: PayloadLinkConfidence;
   candidate: (payload: CodexUsageEventRef, token: CodexUsageEventRef) => boolean;
-  narrow?: (payload: CodexUsageEventRef, tokens: CodexUsageEventRef[]) => CodexUsageEventRef[];
+  narrow?: (payload: CodexUsageEventRef, candidateIndexes: readonly number[], tokens: readonly CodexUsageEventRef[]) => number[];
 }
 
 interface PayloadMatchState {
@@ -346,6 +366,8 @@ interface PayloadMatchState {
   usedPayloads: Set<number>;
   usedTokens: Set<number>;
   ambiguousEvidence: Map<number, { evidence: PayloadLinkEvidence; confidence: PayloadLinkConfidence }>;
+  candidateDomains: Map<number, Set<number>>;
+  tokenIndexesBySession: Map<string, number[]>;
 }
 
 const confidenceRank: Record<PayloadLinkConfidence, number> = {
@@ -379,14 +401,16 @@ function runMatchPass(state: PayloadMatchState, pass: MatchPass): void {
   for (let payloadIndex = 0; payloadIndex < state.payloads.length; payloadIndex += 1) {
     if (state.usedPayloads.has(payloadIndex)) continue;
     const payload = state.payloads[payloadIndex]!;
-    const candidateTokens = state.tokens
-      .map((token, tokenIndex) => ({ token, tokenIndex }))
-      .filter(({ token, tokenIndex }) => !state.usedTokens.has(tokenIndex) && token.sessionId === payload.sessionId && pass.candidate(payload, token));
-    const narrowed = pass.narrow?.(payload, candidateTokens.map(({ token }) => token)) ?? candidateTokens.map(({ token }) => token);
-    const candidateIndexes = narrowed
-      .map((token) => state.tokens.indexOf(token))
-      .filter((tokenIndex) => tokenIndex >= 0 && !state.usedTokens.has(tokenIndex));
-    if (candidateIndexes.length) payloadCandidates.set(payloadIndex, candidateIndexes);
+    const sessionIndexes = state.tokenIndexesBySession.get(payload.sessionId) ?? [];
+    const previousDomain = state.candidateDomains.get(payloadIndex);
+    const searchableIndexes = sessionIndexes.filter((tokenIndex) =>
+      !state.usedTokens.has(tokenIndex) && (!previousDomain || previousDomain.has(tokenIndex)));
+    const candidateIndexes = searchableIndexes.filter((tokenIndex) => pass.candidate(payload, state.tokens[tokenIndex]!));
+    const narrowed = pass.narrow?.(payload, candidateIndexes, state.tokens) ?? candidateIndexes;
+    const validIndexes = narrowed.filter((tokenIndex) =>
+      searchableIndexes.includes(tokenIndex) && !state.usedTokens.has(tokenIndex));
+    if (validIndexes.length) state.candidateDomains.set(payloadIndex, new Set(validIndexes));
+    if (validIndexes.length) payloadCandidates.set(payloadIndex, validIndexes);
   }
   for (const [payloadIndex, tokenIndexes] of payloadCandidates) {
     for (const tokenIndex of tokenIndexes) {
@@ -416,14 +440,38 @@ const dayOf = (timestamp?: number): string | undefined => {
 /** All duplicate/link classifications below use parserV4Eligible payload.usage events only. */
 export function auditCodexPayloadUsageOverlap(files: readonly CodexExtractedFile[]): PayloadUsageOverlapReport {
   const refs = collectCodexUsageEventRefs(files);
-  const observed = refs.payloadUsage.reduce((count, ref) => ({ events: count.events + 1, tokens: count.tokens + totalTokens(ref.usage) }), emptyCount());
+  const summarize = (values: readonly CodexUsageEventRef[]): UsageCount =>
+    values.reduce((count, ref) => ({ events: count.events + 1, tokens: count.tokens + totalTokens(ref.usage) }), emptyCount());
+  const observedPayloads = refs.payloadUsage;
   const eligiblePayloads = refs.payloadUsage.filter((ref) => ref.parserV4Eligible).sort(compareRef);
+  const shadowedPayloads = refs.payloadUsage.filter((ref) => !ref.parserV4Eligible);
   const tokens = [...refs.tokenCount].sort(compareRef);
-  const eligible = eligiblePayloads.reduce((count, ref) => ({ events: count.events + 1, tokens: count.tokens + totalTokens(ref.usage) }), emptyCount());
-  const payloadMatchState: PayloadMatchState = { payloads: eligiblePayloads, tokens, matches: new Map(), usedPayloads: new Set(), usedTokens: new Set(), ambiguousEvidence: new Map() };
-  const exactComponentNarrow = (payload: CodexUsageEventRef, candidates: CodexUsageEventRef[]): CodexUsageEventRef[] => {
-    const same = candidates.filter((token) => sameUsageExact(payload.usage, token.usage));
-    return same.length === 1 ? same : candidates;
+  const observed = summarize(observedPayloads);
+  const eligible = summarize(eligiblePayloads);
+  const shadowed = summarize(shadowedPayloads);
+  const tokenIndexesBySession = new Map<string, number[]>();
+  for (const [tokenIndex, token] of tokens.entries()) {
+    const indexes = tokenIndexesBySession.get(token.sessionId) ?? [];
+    indexes.push(tokenIndex);
+    tokenIndexesBySession.set(token.sessionId, indexes);
+  }
+  const payloadMatchState: PayloadMatchState = {
+    payloads: eligiblePayloads,
+    tokens,
+    matches: new Map(),
+    usedPayloads: new Set(),
+    usedTokens: new Set(),
+    ambiguousEvidence: new Map(),
+    candidateDomains: new Map(),
+    tokenIndexesBySession,
+  };
+  const exactComponentNarrow = (
+    payload: CodexUsageEventRef,
+    candidateIndexes: readonly number[],
+    candidateTokens: readonly CodexUsageEventRef[],
+  ): number[] => {
+    const same = candidateIndexes.filter((tokenIndex) => sameUsageExact(payload.usage, candidateTokens[tokenIndex]!.usage));
+    return same.length === 1 ? same : [...candidateIndexes];
   };
   runMatchPass(payloadMatchState, {
     evidence: "same-response-id",
@@ -457,8 +505,8 @@ export function auditCodexPayloadUsageOverlap(files: readonly CodexExtractedFile
     const ambiguous = payloadMatchState.ambiguousEvidence.get(payloadIndex);
     const payload = eligiblePayloads[payloadIndex]!;
     const evidence = ambiguous?.evidence ?? "none";
-    const confidence = ambiguous?.confidence === "weak" ? "weak" : ambiguous ? "ambiguous" : "unmatched";
-    const relation = confidence === "weak" ? "same-total-different-components" : "unknown";
+    const confidence = ambiguous ? "ambiguous" : "unmatched";
+    const relation = "unknown";
     payloadMatchState.matches.set(payloadIndex, {
       payload,
       evidence,
@@ -532,7 +580,7 @@ export function auditCodexPayloadUsageOverlap(files: readonly CodexExtractedFile
     payloadUniverse: {
       observed,
       parserV4Eligible: eligible,
-      shadowedByHigherPriority: { events: observed.events - eligible.events, tokens: observed.tokens - eligible.tokens },
+      shadowedByHigherPriority: shadowed,
     },
     tokenCount,
     duplicateClassification,
@@ -557,10 +605,10 @@ export function auditCodexPayloadUsageOverlap(files: readonly CodexExtractedFile
     linkedTokens,
     candidateLinkedTokens,
     notConfirmedDuplicateTokens: eligible.tokens - duplicateClassification.confirmed.tokens,
-    payloadUniverseEventInvariant: observed.events === eligible.events + observed.events - eligible.events,
-    payloadUniverseTokenInvariant: observed.tokens === eligible.tokens + observed.tokens - eligible.tokens,
+    payloadUniverseEventInvariant: observed.events === eligible.events + shadowed.events,
+    payloadUniverseTokenInvariant: observed.tokens === eligible.tokens + shadowed.tokens,
     payloadTokenInvariant: eligible.tokens === classifiedTokens,
     payloadEventInvariant: eligible.events === classifiedEvents,
-    payloadClassificationInvariant: eligible.tokens === classifiedTokens,
+    payloadClassificationInvariant: eligible.tokens === classifiedTokens && eligible.events === classifiedEvents,
   };
 }
