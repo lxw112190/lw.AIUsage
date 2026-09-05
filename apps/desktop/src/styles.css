@@ -295,6 +295,33 @@ h3 {
   align-items: flex-end;
   margin-bottom: 2px;
 }
+.trend-heading {
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.trend-modes {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  background: #f5f6f9;
+}
+.trend-modes button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.trend-modes button.active {
+  background: white;
+  color: var(--purple);
+  box-shadow: 0 2px 7px #30374d12;
+  font-weight: 700;
+}
 .table-panel {
   padding: 0;
   overflow: hidden;

@@ -7,7 +7,7 @@ import { formatTokenAmount } from "../format";
 
 const store = useUsageRecordsStore();
 const { t, locale } = useI18n();
-const format = (value: number): string => formatTokenAmount(value);
+const format = (value: number): string => formatTokenAmount(value, { locale: locale.value });
 const dateTime = (value: number): string => new Date(value).toLocaleString(locale.value === "zh" ? "zh-CN" : "en-US");
 const pages = computed(() => {
   const values: Array<number | "…"> = [];

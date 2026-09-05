@@ -6,28 +6,40 @@ import { GridComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import { useOverviewStore } from "../stores/overview";
 import { useUsageStore } from "../stores/usage";
+import { useSettingsStore } from "../stores/settings";
 import { useI18n } from "../i18n";
-import { formatTokenAmount } from "../format";
+import { formatTokenAmount, formatTokenDetail } from "../format";
+import type { ActivityGranularity } from "@lw-aiusage/application";
 
 use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 const store = useOverviewStore();
 const runtime = useUsageStore();
+const settings = useSettingsStore();
 const { t, locale } = useI18n();
 const chartElement = ref<HTMLElement>();
 let chart: ECharts | undefined;
-const format = (value: number): string => formatTokenAmount(value);
-const trend = computed(() => store.data.trend.map((item) => [
-  new Date(item.timestamp).toLocaleDateString(locale.value === "zh" ? "zh-CN" : "en-US", { month: "short", day: "numeric" }),
-  item.totalTokens,
+const format = (value: number): string => formatTokenAmount(value, { locale: locale.value });
+const trendModes: Array<{ value: ActivityGranularity; label: string }> = [
+  { value: "daily", label: "overview.trendDaily" },
+  { value: "weekly", label: "overview.trendWeekly" },
+  { value: "monthly", label: "overview.trendMonthly" },
+  { value: "cumulative", label: "overview.trendCumulative" },
+];
+const trend = computed(() => (store.activityData?.cells ?? []).map((item) => [
+  new Date(item.start).toLocaleDateString(locale.value === "zh" ? "zh-CN" : "en-US", item.end - item.start > 27 * 24 * 60 * 60 * 1000 ? { year: "numeric", month: "short" } : { month: "short", day: "numeric" }),
+  item.cumulativeTokens ?? item.totalTokens,
 ] as [string, number]));
+function changeTrend(value: ActivityGranularity): void { settings.setActivityGranularity(value); }
+void store.loadActivity(settings.activityGranularity);
+watch(() => settings.activityGranularity, (value) => { void store.loadActivity(value); });
 function renderChart(): void {
   if (!chartElement.value) return;
   chart ??= init(chartElement.value);
   chart.setOption({
     grid: { left: 8, right: 12, top: 18, bottom: 22, containLabel: true },
-    tooltip: { trigger: "axis", valueFormatter: (value: number | string) => formatTokenAmount(Number(value)) },
-    xAxis: { type: "category", data: trend.value.map(([key]) => key), axisLine: { lineStyle: { color: "#dfe3ea" } } },
-    yAxis: { type: "value", axisLabel: { formatter: (value: number) => formatTokenAmount(value) }, splitLine: { lineStyle: { color: "#eef0f4" } } },
+    tooltip: { trigger: "axis", valueFormatter: (value: number | string) => formatTokenDetail(Number(value), locale.value) },
+    xAxis: { type: "category", data: trend.value.map(([key]) => key), axisLabel: { hideOverlap: true }, axisLine: { lineStyle: { color: "#dfe3ea" } } },
+    yAxis: { type: "value", axisLabel: { formatter: (value: number) => formatTokenAmount(value, { locale: locale.value }) }, splitLine: { lineStyle: { color: "#eef0f4" } } },
     series: [{ type: "line", smooth: true, data: trend.value.map(([, value]) => value), symbol: "circle", symbolSize: 7, lineStyle: { width: 3, color: "#6957e8" }, itemStyle: { color: "#6957e8" }, areaStyle: { color: "rgba(105,87,232,.16)" } }],
   });
 }
@@ -47,7 +59,7 @@ watch(trend, () => { void nextTick(renderChart); });
       <article class="stat-card"><span class="stat-label">{{ t("overview.estimatedCost") }}</span><strong>${{ store.data.estimatedCostUsd.toFixed(2) }}</strong><span class="stat-meta">{{ t("overview.publicRates") }}</span></article>
     </div>
     <div class="content-grid">
-      <article class="panel chart-panel"><div class="panel-heading"><div><h2>{{ t("overview.tokenTrend") }}</h2><p>{{ t("overview.dailyUsage") }}</p></div><span class="range-pill">{{ t("overview.allTime") }}</span></div><div ref="chartElement" class="chart"></div><div v-if="!trend.length" class="empty-overlay">{{ t("overview.emptyTrend") }}</div></article>
+      <article class="panel chart-panel"><div class="panel-heading trend-heading"><div><h2>{{ t("overview.tokenTrend") }}</h2><p>{{ t("overview.tokenTrendDescription") }}</p></div><div class="trend-modes"><button v-for="mode in trendModes" :key="mode.value" :class="{ active: settings.activityGranularity === mode.value }" @click="changeTrend(mode.value)">{{ t(mode.label) }}</button></div></div><div ref="chartElement" class="chart"></div><div v-if="!store.data.records" class="empty-overlay">{{ t("overview.emptyTrend") }}</div></article>
       <article class="panel"><div class="panel-heading"><div><h2>{{ t("overview.agentBreakdown") }}</h2><p>{{ t("overview.tokensBySource") }}</p></div></div><div v-if="Object.keys(store.data.bySource).length" class="breakdown"><div v-for="(value, key) in store.data.bySource" :key="key" class="breakdown-row"><div><span class="agent-icon">{{ key === "codex" ? "C" : "A" }}</span><span>{{ key }}</span></div><strong>{{ format(value) }}</strong></div></div><div v-else class="empty-state">{{ t("overview.noAgentData") }}</div></article>
     </div>
   </section>

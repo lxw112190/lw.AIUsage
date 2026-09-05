@@ -6,7 +6,7 @@ import { formatTokenAmount } from "../format";
 
 const store = useStatsStore();
 const { t, locale } = useI18n();
-const format = (value: number): string => formatTokenAmount(value);
+const format = (value: number): string => formatTokenAmount(value, { locale: locale.value });
 const money = (value: number): string => `$${value.toFixed(2)}`;
 </script>
 

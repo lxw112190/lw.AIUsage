@@ -12,6 +12,7 @@ import type {
   UsageQuery,
   UsageRepository,
 } from "@lw-aiusage/storage";
+import { ActivityService, type ActivityGranularity, type ActivityViewData } from "./activity";
 
 export interface UsageFilters extends UsageQuery {
   source?: AgentSource;
@@ -161,6 +162,9 @@ export class QueryService {
       byModel: bucketGroup(buckets, (bucket) => bucket.model),
       byProject: bucketGroup(buckets, (bucket) => bucket.projectKey),
     };
+  }
+  async activity(granularity: ActivityGranularity): Promise<ActivityViewData> {
+    return new ActivityService(this.repository).activity(granularity);
   }
   async report(filters: UsageFilters = {}): Promise<UsageReport> {
     const records = await this.records(filters);

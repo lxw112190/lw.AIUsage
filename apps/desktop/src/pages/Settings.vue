@@ -7,10 +7,10 @@ import { formatTokenAmount } from "../format";
 
 const settings = useSettingsStore();
 const usage = useUsageStore();
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const busy = ref(false);
 const auditBusy = ref(false);
-const formatTokens = (value: number): string => formatTokenAmount(value);
+const formatTokens = (value: number): string => formatTokenAmount(value, { locale: locale.value });
 function changeLanguage(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   settings.setLanguage(value === "zh" ? "zh" : "en");
