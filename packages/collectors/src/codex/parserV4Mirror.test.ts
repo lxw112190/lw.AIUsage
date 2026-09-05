@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { totalTokens } from "@lw-aiusage/core";
 import { createFixturePlatform } from "@lw-aiusage/platform";
 import type { FileEntry } from "@lw-aiusage/platform";
+import { stableEventId } from "../shared/identity";
 import { extractCodexFile } from "./rawExtractor";
 import { replayCodexV4 } from "./parserV4Mirror";
 import type { CodexExtractedEvent, CodexExtractedFile } from "./rawAuditTypes";
@@ -31,7 +32,17 @@ const event = (
   total?: number,
   last?: number,
 ): CodexExtractedEvent => ({
-  raw: { type: "token_count", payload },
+  raw: {
+    type: "token_count",
+    payload: {
+      ...payload,
+      info: {
+        ...(typeof payload.info === "object" && payload.info !== null ? payload.info : {}),
+        ...(total === undefined ? {} : { total_token_usage: { input_tokens: total } }),
+        ...(last === undefined ? {} : { last_token_usage: { input_tokens: last } }),
+      },
+    },
+  },
   eventIndex: index,
   eventType: "token_count",
   total: total === undefined ? undefined : counters(total),
@@ -91,6 +102,56 @@ describe("Codex Parser v4 mirror", () => {
     expect(result.usage.inputTokens).toBe(180);
   });
 
+  it("hashes the original protocol node for fallback stable ids", () => {
+    const raw = {
+      type: "token_count",
+      payload: {
+        model: "gpt-5",
+        info: {
+          total_token_usage: {
+            input_tokens: 100,
+            cached_input_tokens: 80,
+            reasoning_output_tokens: 4,
+          },
+        },
+      },
+    };
+    const extracted: CodexExtractedEvent = {
+      raw,
+      eventIndex: 0,
+      eventType: "token_count",
+      total: { input: 100, cachedInput: 80, cacheCreationInput: 0, output: 0, reasoningOutput: 4, total: 0 },
+      source: "token-count",
+    };
+    const result = replayCodexV4([file("/fixture/a.jsonl", [extracted])]);
+    const expected = stableEventId("codex", "/fixture/a.jsonl", raw, {
+      timestamp: undefined,
+      turnId: undefined,
+      responseId: undefined,
+      total: raw.payload.info.total_token_usage,
+    });
+
+    expect([...result.records.keys()]).toEqual([expected]);
+  });
+
+  it("freezes the current v4 usage-field gate", () => {
+    const onlyCacheCreation: CodexExtractedEvent = {
+      raw: {
+        type: "token_count",
+        payload: {
+          model: "gpt-5",
+          info: { total_token_usage: { cache_creation_input_tokens: 100 } },
+        },
+      },
+      eventIndex: 0,
+      eventType: "token_count",
+      total: counters(0),
+      source: "token-count",
+    };
+
+    expect(replayCodexV4([file("/fixture/cache.jsonl", [onlyCacheCreation])]).recordCount).toBe(0);
+  });
+
   it("resolves fork baseline in file scan order and aggregates every dimension", () => {
     const result = replayCodexV4([
       file("/fixture/.codex/sessions/a-parent.jsonl", [
@@ -108,5 +169,24 @@ describe("Codex Parser v4 mirror", () => {
     expect([...result.days.values()].reduce((sum, value) => sum + totalTokens(value), 0)).toBe(totalTokens(result.usage));
     expect(Object.values(result.sources).reduce((sum, value) => sum + totalTokens(value), 0)).toBe(totalTokens(result.usage));
     expect([...result.sessions.values()].reduce((sum, value) => sum + totalTokens(value.usage), 0)).toBe(totalTokens(result.usage));
+  });
+
+  it("canonicalizes logical-singleton files using the Collector winner rule", () => {
+    const smaller = file("/fixture/.codex/sessions/A.jsonl", [event("A", 0, { model: "gpt-5", session_id: "A" }, 100)]);
+    smaller.peekLogicalId = "A";
+    smaller.entry.size = 10;
+    const archived = file("/fixture/.codex/archived_sessions/A.jsonl", [event("A", 0, { model: "gpt-5", session_id: "A" }, 200)]);
+    archived.peekLogicalId = "A";
+    archived.entry.size = 10;
+    const larger = file("/fixture/.codex/sessions/A-copy.jsonl", [event("A", 0, { model: "gpt-5", session_id: "A" }, 300)]);
+    larger.peekLogicalId = "A";
+    larger.entry.size = 20;
+
+    const result = replayCodexV4([smaller, archived, larger]);
+
+    expect(result.discoveredFileCount).toBe(3);
+    expect(result.canonicalFileCount).toBe(1);
+    expect(result.shadowDuplicateCount).toBe(2);
+    expect(result.usage.inputTokens).toBe(300);
   });
 });

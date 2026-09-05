@@ -5,6 +5,7 @@ import type {
   UsageBucket,
   UsageParserState,
   UsageRecord,
+  TokenUsage,
 } from "@lw-aiusage/core";
 
 export interface FileCursor {
@@ -54,6 +55,14 @@ export interface SourceUsageSummary {
   usage: UsageRecord["usage"];
   totalTokens: number;
 }
+export interface SourceAuditRecord {
+  id: string;
+  sessionId?: string;
+  timestamp: number;
+  model: string;
+  projectKey: string;
+  usage: TokenUsage;
+}
 export interface UsageRepository {
   putRecords(records: readonly UsageRecord[]): Promise<number>;
   commitScan(
@@ -68,6 +77,7 @@ export interface UsageRepository {
   getProjectOptions(): Promise<string[]>;
   getBuckets(query?: UsageQuery): Promise<UsageBucket[]>;
   getSourceUsageSummary(source: AgentSource): Promise<SourceUsageSummary>;
+  getSourceAuditRecords(source: AgentSource): Promise<SourceAuditRecord[]>;
   putBuckets(buckets: readonly UsageBucket[]): Promise<void>;
   getCursors(): Promise<FileCursor[]>;
   putCursor(cursor: FileCursor): Promise<void>;
@@ -191,6 +201,16 @@ export class MemoryUsageRepository implements UsageRepository {
       reasoningOutputTokens: total.reasoningOutputTokens + record.usage.reasoningOutputTokens,
     }), { inputTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 });
     return { source, recordCount: records.length, sessionCount: new Set(records.filter((record) => record.sessionId).map((record) => record.sessionId)).size, usage, totalTokens: Object.values(usage).reduce((sum, value) => sum + value, 0) };
+  }
+  async getSourceAuditRecords(source: AgentSource): Promise<SourceAuditRecord[]> {
+    return (await this.getRecords({ source })).map((record) => ({
+      id: record.id,
+      sessionId: record.sessionId,
+      timestamp: record.timestamp,
+      model: record.model,
+      projectKey: record.projectKey,
+      usage: { ...record.usage },
+    }));
   }
   async putBuckets(buckets: readonly UsageBucket[]): Promise<void> {
     this.buckets.clear();

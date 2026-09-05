@@ -9,6 +9,19 @@ import type { CodexUsageSource } from "./rawAuditTypes";
 export const CODEX_META_PEEK_BYTES = 64 * 1024;
 export const CODEX_AUDIT_CHUNK_BYTES = 1024 * 1024;
 
+export interface CodexSourceSnapshotFile {
+  path: string;
+  logicalId?: string;
+  pathHash: string;
+  size: number;
+  modifiedAt: number;
+}
+
+export interface CodexSourceSnapshot {
+  files: CodexSourceSnapshotFile[];
+  fingerprint: string;
+}
+
 const usageFields = ["input_tokens", "inputTokens", "cached_input_tokens", "cachedInputTokens", "cache_creation_input_tokens", "cacheCreationInputTokens", "cache_write_input_tokens", "output_tokens", "outputTokens", "total_tokens", "totalTokens", "reasoning_output_tokens", "reasoningOutputTokens"];
 const hasUsageFields = (value: unknown): boolean => { const object = objectValue(value); return !!object && usageFields.some((key) => key in object); };
 const eventTypeOf = (event: UnknownCodexEvent): string | undefined => stringValue(event.type) ?? stringValue(objectValue(event.payload)?.type) ?? stringValue(objectValue(objectValue(event.payload)?.msg)?.type);
@@ -40,10 +53,12 @@ export async function extractCodexFiles(platform: RuntimePlatform, entries: read
   const files: CodexExtractedFile[] = []; for (const [index, entry] of entries.entries()) { const snapshotFile = snapshot?.files.find((file) => file.path === entry.path); const limit = snapshotFile?.size ?? entry.size; files.push(await extractCodexFile(platform, entry, limit, snapshotFile?.logicalId)); onProgress?.(index + 1, entries.length); } return files;
 }
 
-export async function snapshotCodexFiles(platform: RuntimePlatform): Promise<{ files: Array<{ path: string; logicalId?: string; pathHash: string; size: number; modifiedAt: number }>; fingerprint: string }> {
+export async function snapshotCodexSource(platform: RuntimePlatform): Promise<CodexSourceSnapshot> {
   const home = await platform.paths.home(); const roots = [`${home}/.codex/sessions`, `${home}/.codex/archived_sessions`]; const entries: FileEntry[] = [];
   async function walk(root: string): Promise<void> { if (!(await platform.fs.exists(root))) return; for (const entry of await platform.fs.list(root)) if (entry.isFile && entry.name.toLowerCase().endsWith(".jsonl")) entries.push(entry); else if (entry.isDirectory) await walk(entry.path); }
   for (const root of roots) await walk(root);
   const files = []; for (const entry of entries) { const meta = await peekCodexSessionMeta(platform, entry); files.push({ path: entry.path, logicalId: meta.sessionId, pathHash: stableHash(entry.path), size: entry.size, modifiedAt: entry.modifiedAt }); }
   files.sort((left, right) => left.pathHash.localeCompare(right.pathHash) || left.path.localeCompare(right.path)); return { files, fingerprint: stableHash(JSON.stringify(files.map(({ path: _path, ...file }) => file))) };
 }
+
+export const snapshotCodexFiles = snapshotCodexSource;

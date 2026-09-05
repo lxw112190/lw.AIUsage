@@ -8,6 +8,7 @@ import type {
   ParserV4MirrorRecord,
   ParserV4MirrorSessionSummary,
 } from "./rawAuditTypes";
+import { canonicalizeMirrorFiles } from "./mirrorFileReconcile";
 
 interface ParserV4MirrorState {
   sessionId?: string;
@@ -20,6 +21,9 @@ interface ParserV4MirrorState {
 }
 
 export interface ParserV4MirrorResult {
+  discoveredFileCount: number;
+  canonicalFileCount: number;
+  shadowDuplicateCount: number;
   records: Map<string, ParserV4MirrorRecord>;
   usage: TokenUsage;
   recordCount: number;
@@ -75,6 +79,20 @@ const firstString = (value: unknown, ...keys: string[]): string | undefined => {
   return undefined;
 };
 
+const hasUsageFieldsV4 = (value: unknown): boolean => {
+  const object = objectValue(value);
+  return !!object && [
+    "input_tokens",
+    "inputTokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "outputTokens",
+    "total_tokens",
+    "totalTokens",
+    "reasoning_output_tokens",
+  ].some((key) => key in object);
+};
+
 const usageFrom = (value: CodexRawCounters | undefined): TokenUsage | undefined =>
   value ? normalizeRawCounters(value) : undefined;
 
@@ -93,6 +111,11 @@ function mirrorEventV4(
     objectValue(payload.info) ??
     objectValue(msg?.info) ??
     objectValue(event.raw.info);
+  const lastNode = nestedInfo?.last_token_usage ?? nestedInfo?.lastTokenUsage;
+  const totalNode = nestedInfo?.total_token_usage ?? nestedInfo?.totalTokenUsage;
+  const flatUsageNode =
+    objectValue(payload.usage) ??
+    (hasUsageFieldsV4(payload) ? payload : undefined);
   const model =
     stringAt(payload, "model") ??
     stringAt(nestedInfo, "model") ??
@@ -109,7 +132,8 @@ function mirrorEventV4(
   const projectKey =
     stringAt(payload, "cwd") ??
     stringAt(payload, "project") ??
-    context.projectKey;
+    context.projectKey ??
+    "unknown";
   const state: ParserV4MirrorState = {
     ...context,
     sessionId,
@@ -125,27 +149,26 @@ function mirrorEventV4(
     state.forkBaselineApplied = false;
   }
 
-  const usageNode = event.last ?? event.total ?? event.flat;
-  // The extractor has already validated the protocol node. The values here
-  // are normalized CodexRawCounters, so applying the protocol-key gate again
-  // would incorrectly reject them (input_tokens vs. input).
-  if (!usageNode || !model)
+  const rawUsageNode = lastNode ?? totalNode ?? flatUsageNode;
+  if (!rawUsageNode || !model || !hasUsageFieldsV4(rawUsageNode))
     return { state };
 
-  const normalizedTotal = usageFrom(event.total);
+  const normalizedTotal = event.total && hasUsageFieldsV4(totalNode)
+    ? usageFrom(event.total)
+    : undefined;
   if (normalizedTotal) state.previousTotalUsage = normalizedTotal;
   const previousTotal = context.previousTotalUsage ?? state.forkBaselineUsage;
-  const usage = event.last
-    ? event.total && state.forkBaselineUsage && !context.previousTotalUsage
+  const usage = lastNode && event.last
+    ? totalNode && event.total && state.forkBaselineUsage && !context.previousTotalUsage
       ? subtractUsage(
           usageFrom(event.total) ?? zeroUsage(),
           state.forkBaselineUsage,
         )
       : usageFrom(event.last) ?? zeroUsage()
-    : event.total
+    : totalNode && event.total
       ? subtractUsage(usageFrom(event.total) ?? zeroUsage(), previousTotal)
       : usageFrom(event.flat) ?? zeroUsage();
-  if (event.total && state.forkBaselineUsage && !context.previousTotalUsage)
+  if (totalNode && event.total && state.forkBaselineUsage && !context.previousTotalUsage)
     state.forkBaselineApplied = true;
   if (!hasTokens(usage)) return { state };
 
@@ -162,7 +185,7 @@ function mirrorEventV4(
     timestamp: event.raw.timestamp,
     turnId: stringAt(payload, "turn_id", "turnId"),
     responseId: stringAt(payload, "response_id", "responseId"),
-    total: event.total ?? event.last ?? event.flat,
+    total: totalNode ?? rawUsageNode,
   });
   return {
     state,
@@ -171,6 +194,7 @@ function mirrorEventV4(
       sessionId,
       timestamp,
       model,
+      projectKey,
       sourceKind: event.source ?? "flat-payload",
       usage,
     },
@@ -202,7 +226,8 @@ export function replayCodexV4(
 ): ParserV4MirrorResult {
   const records = new Map<string, ParserV4MirrorRecord>();
   const sessionTotals = new Map<string, TokenUsage>();
-  const orderedFiles = [...files].sort((left, right) =>
+  const canonicalFiles = canonicalizeMirrorFiles(files);
+  const orderedFiles = [...canonicalFiles].sort((left, right) =>
     left.entry.path.localeCompare(right.entry.path),
   );
 
@@ -248,6 +273,9 @@ export function replayCodexV4(
     addUsage(sources[record.sourceKind], record.usage);
   }
   return {
+    discoveredFileCount: files.length,
+    canonicalFileCount: canonicalFiles.length,
+    shadowDuplicateCount: files.length - canonicalFiles.length,
     records,
     usage,
     recordCount: records.size,

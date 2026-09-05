@@ -14,6 +14,7 @@ import type {
   UsageQuery,
   UsageRepository,
   SourceUsageSummary,
+  SourceAuditRecord,
 } from "./repository";
 
 class AiUsageDatabase extends Dexie {
@@ -199,6 +200,17 @@ export class DexieUsageRepository implements UsageRepository {
       reasoningOutputTokens: total.reasoningOutputTokens + record.usage.reasoningOutputTokens,
     }), { inputTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 });
     return { source, recordCount: records.length, sessionCount: new Set(records.filter((record) => record.sessionId).map((record) => record.sessionId)).size, usage, totalTokens: Object.values(usage).reduce((sum, value) => sum + value, 0) };
+  }
+  async getSourceAuditRecords(source: AgentSource): Promise<SourceAuditRecord[]> {
+    const rows = await this.db.records.where("source").equals(source).toArray();
+    return rows.map((row) => ({
+      id: row.id,
+      sessionId: row.sessionId,
+      timestamp: row.timestamp,
+      model: row.model,
+      projectKey: row.projectKey,
+      usage: { ...row.usage },
+    }));
   }
   async putBuckets(buckets: readonly UsageBucket[]): Promise<void> {
     await this.db.transaction("rw", this.db.buckets, async () => {

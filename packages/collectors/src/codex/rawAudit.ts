@@ -5,7 +5,7 @@ import { parseJsonl } from "../shared/jsonl";
 import { counterDecrease, copyRawCounters, normalizeRawCounters, positiveRawDelta, rawCounterTotal, rawCountersFrom, sameRawCounters, type CodexRawCounters } from "./accounting";
 import type { UnknownCodexEvent } from "./types";
 import type { CodexUsageSource } from "./rawAuditTypes";
-import { peekCodexSessionMeta } from "./rawExtractor";
+import { snapshotCodexSource, type CodexSourceSnapshot } from "./rawExtractor";
 
 export type CodexTokenEventClass = "normal-delta" | "duplicate-snapshot" | "counter-reset" | "last-delta-match" | "last-delta-mismatch" | "last-only" | "total-only" | "fork-first" | "fork-baseline-unresolved";
 export type { CodexUsageSource } from "./rawAuditTypes";
@@ -29,8 +29,8 @@ export interface CodexRawAuditReport {
   peakDays: CodexRawAuditDay[]; anomalies: CodexRawAuditAnomalySummary;
 }
 
-export interface CodexSourceSnapshotFile { path: string; logicalId?: string; pathHash: string; size: number; modifiedAt: number }
-export interface CodexSourceSnapshot { files: CodexSourceSnapshotFile[]; fingerprint: string }
+export type { CodexSourceSnapshot } from "./rawExtractor";
+export { snapshotCodexSource } from "./rawExtractor";
 
 const CHUNK_BYTES = 1024 * 1024;
 const isJsonl = (entry: FileEntry): boolean => entry.isFile && entry.name.toLowerCase().endsWith(".jsonl");
@@ -57,17 +57,6 @@ const eventTypeOf = (event: UnknownCodexEvent): string | undefined => stringValu
 const sourceInfo = (event: UnknownCodexEvent): { source?: CodexUsageSource; last?: CodexRawCounters; total?: CodexRawCounters; flat?: CodexRawCounters } => { const payload = objectValue(event.payload) ?? event; const msg = objectValue(payload.msg); const info = objectValue(payload.info) ?? objectValue(msg?.info) ?? objectValue(event.info); const last = rawCountersFrom(info?.last_token_usage ?? info?.lastTokenUsage); const total = rawCountersFrom(info?.total_token_usage ?? info?.totalTokenUsage); const type = eventTypeOf(event); if (type === "token_count" || last || total) return { source: type === "token_count" ? "token-count" : "nested-info-non-token-count", last, total }; const payloadUsage = rawCountersFrom(payload.usage); if (payloadUsage && hasUsageFields(payload.usage)) return { source: "payload-usage", flat: payloadUsage }; const flat = hasUsageFields(payload) ? rawCountersFrom(payload) : undefined; return flat ? { source: "flat-payload", flat } : {}; };
 const sessionMeta = (event: UnknownCodexEvent): { id?: string; forkedFromId?: string; timestamp?: number } => { const payload = objectValue(event.payload) ?? event; return { id: stringValue(payload.id) ?? stringValue(payload.session_id) ?? stringValue(payload.sessionId), forkedFromId: stringValue(payload.forked_from_id) ?? stringValue(payload.forkedFromId), timestamp: timestampOf(event) }; };
 async function recursiveJsonl(platform: RuntimePlatform, root: string): Promise<FileEntry[]> { if (!(await platform.fs.exists(root))) return []; const entries = await platform.fs.list(root); const files: FileEntry[] = []; for (const entry of entries) if (isJsonl(entry)) files.push(entry); else if (entry.isDirectory) files.push(...await recursiveJsonl(platform, entry.path)); return files; }
-export async function snapshotCodexSource(platform: RuntimePlatform): Promise<CodexSourceSnapshot> {
-  const home = await platform.paths.home(); const roots = [`${home}/.codex/sessions`, `${home}/.codex/archived_sessions`];
-  const entries = (await Promise.all(roots.map((root) => recursiveJsonl(platform, root)))).flat();
-  const files = [];
-  for (const entry of entries) {
-    const meta = await peekCodexSessionMeta(platform, entry);
-    files.push({ path: entry.path, logicalId: meta.sessionId, pathHash: stableHash(entry.path), size: entry.size, modifiedAt: entry.modifiedAt });
-  }
-  files.sort((left, right) => left.pathHash.localeCompare(right.pathHash) || left.path.localeCompare(right.path));
-  return { files: files.map(({ path, ...file }) => ({ path, ...file })), fingerprint: stableHash(JSON.stringify(files.map(({ path: _path, ...file }) => file))) };
-}
 async function readFile(platform: RuntimePlatform, entry: FileEntry, maxSize = entry.size): Promise<RawFile> {
   const result: RawFile = { entry, totalEvents: 0, events: [] }; let offset = 0; let pendingText = ""; let inheritedTimestamp: number | undefined; let sequence = 0; let eventIndex = 0; let previousEventType: string | undefined; let previousModel: string | undefined; let previousTimestamp: number | undefined; let currentModel: string | undefined; const decoder = new TextDecoder();
   const consume = (event: UnknownCodexEvent): void => { const index = eventIndex++; result.totalEvents += 1; const explicitTimestamp = timestampOf(event); const type = eventTypeOf(event); if (type === "session_meta") { const meta = sessionMeta(event); result.sessionId ??= meta.id; result.forkedFromId ??= meta.forkedFromId; result.sessionTimestamp ??= meta.timestamp; } const payload = objectValue(event.payload) ?? event; const msg = objectValue(payload.msg); result.forkedFromId ??= stringValue(payload.forked_from_id) ?? stringValue(payload.forkedFromId) ?? stringValue(msg?.forked_from_id) ?? stringValue(msg?.forkedFromId); const resolvedModel = eventModel(event, currentModel); if (resolvedModel) currentModel = resolvedModel; if (explicitTimestamp !== undefined) inheritedTimestamp = explicitTimestamp; const source = sourceInfo(event); const base = { previousEventType, modelBefore: previousModel, timeGapMs: explicitTimestamp !== undefined && previousTimestamp !== undefined ? explicitTimestamp - previousTimestamp : undefined }; if (!source.source) { previousEventType = type ?? previousEventType; previousModel = resolvedModel ?? previousModel; previousTimestamp = explicitTimestamp ?? previousTimestamp; return; } const timestamp = explicitTimestamp ?? inheritedTimestamp ?? result.sessionTimestamp ?? (entry.modifiedAt || undefined); const timestampSource = explicitTimestamp !== undefined ? "explicit" : inheritedTimestamp !== undefined ? "inherited" : result.sessionTimestamp !== undefined ? "session" : entry.modifiedAt ? "file-modified" : "unresolved"; const usageNode = source.total ?? source.last ?? source.flat; result.events.push({ ...base, sessionId: result.sessionId ?? `file:${entry.path}`, forkedFromId: result.forkedFromId, source: source.source, usage: source.total, lastUsage: source.last, flatUsage: source.flat, timestamp, timestampSource, sequence, eventIndex: index, eventType: type, model: resolvedModel, stableId: stableEventId("codex", result.sessionId ?? entry.path, event, { timestamp: event.timestamp, turnId: stringValue(payload.turn_id) ?? stringValue(payload.turnId), responseId: stringValue(payload.response_id) ?? stringValue(payload.responseId), total: usageNode }), ignoredNoModel: !resolvedModel }); sequence += 1; previousEventType = type ?? previousEventType; previousModel = resolvedModel ?? previousModel; previousTimestamp = timestamp ?? previousTimestamp; };

@@ -35,6 +35,11 @@ describe("Codex accounting audit end to end", () => {
     const report = await new CodexAccountingAuditService(platform, repository).audit();
     expect(report.snapshotStable).toBe(true);
     expect(report.reconciliation.differenceTokens).toBe(0);
+    expect(report.reconciliation.usageComponentsMatched).toBe(true);
+    expect(report.reconciliation.recordIdentityMatched).toBe(true);
+    expect(report.reconciliation.recordContentMatched).toBe(true);
+    expect(report.reconciliation.recordCountMatched).toBe(true);
+    expect(report.reconciliation.sessionCountMatched).toBe(true);
     expect(report.reconciliation.matched).toBe(true);
     expect(report.raw.methods.parserEquivalentV4UniqueRecordCount).toBe(report.database.recordCount);
     expect(report.raw.usageSources.payloadUsage.events).toBe(3);

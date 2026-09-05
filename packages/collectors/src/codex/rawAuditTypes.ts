@@ -39,6 +39,7 @@ export interface ParserV4MirrorRecord {
   sessionId?: string;
   timestamp: number;
   model: string;
+  projectKey: string;
   sourceKind: CodexUsageSource;
   usage: TokenUsage;
 }
