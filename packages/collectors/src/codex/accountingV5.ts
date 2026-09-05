@@ -38,7 +38,7 @@ export interface RawTokenUsage {
 }
 
 export interface TokenCountState {
-  previousTotal?: TokenUsage;
+  previousTotalRaw?: RawTokenUsage;
   segment: number;
 }
 
@@ -59,11 +59,6 @@ export interface AccountingContribution {
   };
 }
 
-const numberAt = (object: Record<string, unknown>, key: string): number => {
-  const value = object[key];
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(value, 0) : 0;
-};
-
 const hasKey = (object: Record<string, unknown>, key: string): boolean => key in object;
 
 const firstPresentNumber = (
@@ -71,7 +66,10 @@ const firstPresentNumber = (
   keys: readonly string[],
 ): { value: number; present: boolean } => {
   for (const key of keys) {
-    if (hasKey(object, key)) return { value: numberAt(object, key), present: true };
+    if (!hasKey(object, key)) continue;
+    const value = object[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return { value: Math.max(value, 0), present: true };
   }
   return { value: 0, present: false };
 };
@@ -123,27 +121,45 @@ export function normalizeRawTokenUsage(raw: RawTokenUsage): TokenUsage {
   return usage;
 }
 
-const sameUsage = (left: TokenUsage, right: TokenUsage): boolean =>
-  left.inputTokens === right.inputTokens &&
-  left.cachedInputTokens === right.cachedInputTokens &&
-  left.cacheCreationInputTokens === right.cacheCreationInputTokens &&
-  left.outputTokens === right.outputTokens &&
-  left.reasoningOutputTokens === right.reasoningOutputTokens;
+type RawCounterField = "input" | "cachedInput" | "cacheCreationInput" | "output" | "reasoningOutput" | "total";
+const rawCounterFields: readonly RawCounterField[] = ["input", "cachedInput", "cacheCreationInput", "output", "reasoningOutput", "total"];
+const rawFieldPresent = (value: RawTokenUsage, field: RawCounterField): boolean => value.fieldPresence[field];
 
-const usageDecreased = (current: TokenUsage, previous: TokenUsage): boolean =>
-  current.inputTokens < previous.inputTokens ||
-  current.cachedInputTokens < previous.cachedInputTokens ||
-  current.cacheCreationInputTokens < previous.cacheCreationInputTokens ||
-  current.outputTokens < previous.outputTokens ||
-  current.reasoningOutputTokens < previous.reasoningOutputTokens;
+/** Compares only counter fields explicitly present in both snapshots. */
+export function rawCounterDecreased(current: RawTokenUsage, previous: RawTokenUsage): boolean {
+  return rawCounterFields.some((field) =>
+    rawFieldPresent(current, field) && rawFieldPresent(previous, field) && current[field] < previous[field]);
+}
 
-const positiveDelta = (current: TokenUsage, previous: TokenUsage): TokenUsage => ({
-  inputTokens: Math.max(current.inputTokens - previous.inputTokens, 0),
-  cachedInputTokens: Math.max(current.cachedInputTokens - previous.cachedInputTokens, 0),
-  cacheCreationInputTokens: Math.max(current.cacheCreationInputTokens - previous.cacheCreationInputTokens, 0),
-  outputTokens: Math.max(current.outputTokens - previous.outputTokens, 0),
-  reasoningOutputTokens: Math.max(current.reasoningOutputTokens - previous.reasoningOutputTokens, 0),
-});
+/** Returns true only when at least one shared field exists and all shared values are equal. */
+export function sameRawCumulative(current: RawTokenUsage, previous: RawTokenUsage): boolean {
+  const sharedFields = rawCounterFields.filter((field) => rawFieldPresent(current, field) && rawFieldPresent(previous, field));
+  return sharedFields.length > 0 && sharedFields.every((field) => current[field] === previous[field]);
+}
+
+/** Computes a raw-first delta; missing current fields remain missing rather than becoming zero counters. */
+export function rawCumulativeDelta(current: RawTokenUsage, previous: RawTokenUsage): RawTokenUsage {
+  const value = (field: RawCounterField): number =>
+    rawFieldPresent(current, field)
+      ? Math.max(current[field] - (rawFieldPresent(previous, field) ? previous[field] : 0), 0)
+      : 0;
+  return {
+    input: value("input"),
+    cachedInput: value("cachedInput"),
+    cacheCreationInput: value("cacheCreationInput"),
+    output: value("output"),
+    reasoningOutput: value("reasoningOutput"),
+    total: value("total"),
+    fieldPresence: {
+      input: rawFieldPresent(current, "input"),
+      cachedInput: rawFieldPresent(current, "cachedInput"),
+      cacheCreationInput: rawFieldPresent(current, "cacheCreationInput"),
+      output: rawFieldPresent(current, "output"),
+      reasoningOutput: rawFieldPresent(current, "reasoningOutput"),
+      total: rawFieldPresent(current, "total"),
+    },
+  };
+}
 
 const hasTokens = (usage: TokenUsage): boolean => totalTokens(usage) > 0;
 
@@ -157,26 +173,26 @@ export function deriveTokenCountContribution(
 
   const lastUsage = tokenCount.last ? normalizeRawTokenUsage(tokenCount.last) : undefined;
   const totalUsage = tokenCount.total ? normalizeRawTokenUsage(tokenCount.total) : undefined;
-  const previousTotal = state.previousTotal;
-  const counterReset = !!totalUsage && !!previousTotal && usageDecreased(totalUsage, previousTotal);
-  const repeatedTotalWithNonZeroLast = !!lastUsage && !!totalUsage && !!previousTotal && sameUsage(totalUsage, previousTotal) && hasTokens(lastUsage);
+  const previousTotalRaw = state.previousTotalRaw;
+  const counterReset = !!tokenCount.total && !!previousTotalRaw && rawCounterDecreased(tokenCount.total, previousTotalRaw);
+  const repeatedTotalWithNonZeroLast = !!lastUsage && !!tokenCount.total && !!previousTotalRaw && sameRawCumulative(tokenCount.total, previousTotalRaw) && hasTokens(lastUsage);
 
   let usage: TokenUsage;
   let method: TokenCountAccountingMethod;
   if (lastUsage) {
     usage = lastUsage;
-    method = counterReset ? "total-reset" : "last";
+    method = "last";
   } else if (totalUsage && counterReset) {
     usage = totalUsage;
     method = "total-reset";
-  } else if (totalUsage && !previousTotal) {
+  } else if (totalUsage && !previousTotalRaw) {
     usage = totalUsage;
     method = "total-initial";
-  } else if (totalUsage && sameUsage(totalUsage, previousTotal!)) {
+  } else if (totalUsage && previousTotalRaw && sameRawCumulative(tokenCount.total!, previousTotalRaw)) {
     usage = zeroUsage();
     method = "duplicate-zero";
-  } else if (totalUsage) {
-    usage = positiveDelta(totalUsage, previousTotal!);
+  } else if (tokenCount.total && previousTotalRaw) {
+    usage = normalizeRawTokenUsage(rawCumulativeDelta(tokenCount.total, previousTotalRaw));
     method = "total-delta";
   } else {
     usage = lastUsage ?? zeroUsage();
@@ -187,7 +203,7 @@ export function deriveTokenCountContribution(
     usage,
     method,
     nextState: {
-      previousTotal: totalUsage ?? previousTotal,
+      previousTotalRaw: tokenCount.total ?? previousTotalRaw,
       segment: state.segment + (counterReset ? 1 : 0),
     },
     diagnostics: { counterReset, repeatedTotalWithNonZeroLast },
@@ -230,21 +246,22 @@ export function deduplicateTokenCountEvents(
   const unique: CodexAccountingEvent[] = [];
   let exactDuplicateCount = 0;
   for (const event of events) {
-    if (seen.has(event.rawIdentity)) {
+    const scope = event.sessionId ?? event.sourcePath;
+    const key = `${scope}\n${event.rawIdentity}`;
+    if (seen.has(key)) {
       exactDuplicateCount += 1;
       continue;
     }
-    seen.add(event.rawIdentity);
+    seen.add(key);
     unique.push(event);
   }
   return { events: unique, exactDuplicateCount };
 }
 
-/** Uses only explicit event time, then the deterministic file metadata fallback; never Date.now(). */
+/** Uses only explicit event time; never guesses from file metadata or Date.now(). */
 export function deterministicAccountingTimestamp(
   event: Pick<CodexAccountingEvent, "timestamp">,
-  fileModifiedAt?: number,
 ): number | undefined {
-  const timestamp = event.timestamp ?? fileModifiedAt;
+  const timestamp = event.timestamp;
   return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : undefined;
 }

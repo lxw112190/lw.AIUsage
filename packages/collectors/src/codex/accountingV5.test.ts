@@ -16,15 +16,19 @@ const raw = (value: Record<string, unknown>): RawTokenUsage => {
   if (!result) throw new Error("expected usage");
   return result;
 };
-const event = (rawIdentity: string, tokenCount: CodexAccountingEvent["tokenCount"]): CodexAccountingEvent => ({
+const event = (
+  rawIdentity: string,
+  tokenCount: CodexAccountingEvent["tokenCount"],
+  sessionId = "session",
+): CodexAccountingEvent => ({
   sourcePath: "/fixture/session.jsonl",
   eventIndex: 0,
-  sessionId: "session",
+  sessionId,
   tokenCount,
   rawIdentity,
 });
 const state = (previousRaw?: RawTokenUsage, segment = 0): TokenCountState => ({
-  previousTotal: previousRaw ? normalizeRawTokenUsage(previousRaw) : undefined,
+  previousTotalRaw: previousRaw,
   segment,
 });
 
@@ -64,6 +68,8 @@ describe("Codex v5 accounting engine", () => {
       reasoningOutputTokens: 5,
     });
     expect(decodeRawTokenUsage({ input_tokens: 0 })?.fieldPresence.input).toBe(true);
+    expect(raw({ input_tokens: null, inputTokens: 12 }).input).toBe(12);
+    expect(raw({ cache_write_input_tokens: null, cache_creation_input_tokens: 4 }).cacheCreationInput).toBe(4);
     expect(decodeRawTokenUsage({})).toBeUndefined();
   });
 
@@ -75,7 +81,7 @@ describe("Codex v5 accounting engine", () => {
 
     expect(contribution?.method).toBe("last");
     expect(contribution?.usage.inputTokens).toBe(20);
-    expect(contribution?.nextState.previousTotal?.inputTokens).toBe(120);
+    expect(contribution?.nextState.previousTotalRaw?.input).toBe(120);
   });
 
   it("derives initial, delta, duplicate, and reset total-only contributions", () => {
@@ -101,23 +107,52 @@ describe("Codex v5 accounting engine", () => {
     );
 
     expect(repeated).toMatchObject({ method: "last", usage: { inputTokens: 12 }, diagnostics: { repeatedTotalWithNonZeroLast: true } });
-    expect(reset).toMatchObject({ method: "total-reset", usage: { inputTokens: 8 }, diagnostics: { counterReset: true } });
+    expect(reset).toMatchObject({ method: "last", usage: { inputTokens: 8 }, diagnostics: { counterReset: true } });
+  });
+
+  it("does not treat a missing cumulative field as a counter reset", () => {
+    const previous = raw({ input_tokens: 100, cached_input_tokens: 20, output_tokens: 10 });
+    const current = raw({ total_tokens: 150 });
+    const contribution = deriveTokenCountContribution(event("missing-field", { total: current }), state(previous));
+
+    expect(contribution?.diagnostics.counterReset).toBe(false);
+    expect(contribution?.method).toBe("total-delta");
+    expect(contribution?.nextState.previousTotalRaw?.fieldPresence.total).toBe(true);
+  });
+
+  it("distinguishes explicit zero from a missing cumulative field", () => {
+    const previous = raw({ input_tokens: 100, cached_input_tokens: 20, output_tokens: 10 });
+    const missing = deriveTokenCountContribution(
+      event("missing-cache", { total: raw({ input_tokens: 100, output_tokens: 10 }) }),
+      state(previous),
+    );
+    const explicitZero = deriveTokenCountContribution(
+      event("zero-cache", { total: raw({ input_tokens: 100, cached_input_tokens: 0, output_tokens: 10 }) }),
+      state(previous),
+    );
+
+    expect(missing?.diagnostics.counterReset).toBe(false);
+    expect(explicitZero?.diagnostics.counterReset).toBe(true);
   });
 
   it("hard-deduplicates only repeated raw identities and exposes deterministic identity data", () => {
     const first = event("same", { last: raw({ input_tokens: 10 }) });
     const duplicate = { ...first, eventIndex: 1 };
     const distinct = { ...first, rawIdentity: "different", eventIndex: 2 };
-    const result = deduplicateTokenCountEvents([first, duplicate, distinct]);
+    const otherSession = { ...first, sessionId: "other-session", eventIndex: 3 };
+    const result = deduplicateTokenCountEvents([first, duplicate, distinct, otherSession]);
 
     expect(result.exactDuplicateCount).toBe(1);
-    expect(result.events.map((item) => item.rawIdentity)).toEqual(["same", "different"]);
+    expect(result.events.map((item) => `${item.sessionId}:${item.rawIdentity}`)).toEqual([
+      "session:same",
+      "session:different",
+      "other-session:same",
+    ]);
     expect(tokenCountIdentity(first)).toMatchObject({ sessionId: "session", lastFingerprint: expect.any(String) });
   });
 
   it("never uses wall-clock time for accounting timestamps", () => {
-    expect(deterministicAccountingTimestamp({ timestamp: 1_700_000_000_000 }, 9)).toBe(1_700_000_000_000);
-    expect(deterministicAccountingTimestamp({ timestamp: undefined }, 1_700_000_000_000)).toBe(1_700_000_000_000);
+    expect(deterministicAccountingTimestamp({ timestamp: 1_700_000_000_000 })).toBe(1_700_000_000_000);
     expect(deterministicAccountingTimestamp({ timestamp: undefined })).toBeUndefined();
   });
 });
