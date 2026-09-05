@@ -50,6 +50,8 @@ const messages: Record<Language, Record<string, string>> = {
     "usage.output": "输出",
     "usage.total": "总计",
     "usage.empty": "没有符合当前筛选条件的记录。",
+    "usage.recordsCount": "条记录",
+    "usage.pageSize": "每页",
     "stats.title": "统计",
     "stats.description": "基于标准化本地记录，按模型和项目汇总。",
     "stats.models": "模型",
@@ -155,6 +157,8 @@ const messages: Record<Language, Record<string, string>> = {
     "usage.output": "Output",
     "usage.total": "Total",
     "usage.empty": "No records match the current filters.",
+    "usage.recordsCount": "records",
+    "usage.pageSize": "Per page",
     "stats.title": "Statistics",
     "stats.description":
       "Usage grouped by model and project from normalized local records.",

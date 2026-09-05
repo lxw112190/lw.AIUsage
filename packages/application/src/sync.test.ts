@@ -24,6 +24,8 @@ describe("SyncManager", () => {
       source: "codex",
       name: "Codex",
       parserVersion: 2,
+      fileReconcileMode: "logical-singleton",
+      roots: async () => [],
       detect: async () => ({ installed: true, dataAvailable: true, roots: [] }),
       discoverFiles: async () => [file],
       scanFile: async (): Promise<FileScanResult> => {

@@ -299,6 +299,53 @@ h3 {
   padding: 0;
   overflow: hidden;
 }
+.table-panel.is-loading table {
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+.table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 18px;
+  padding: 12px 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.table-footer label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.table-footer select,
+.pagination button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: var(--ink);
+  padding: 4px 8px;
+}
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.pagination button {
+  min-width: 28px;
+  cursor: pointer;
+}
+.pagination button.active {
+  border-color: var(--purple);
+  background: var(--purple);
+  color: white;
+}
+.pagination button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.page-ellipsis {
+  padding: 0 4px;
+}
 table {
   border-collapse: collapse;
   width: 100%;

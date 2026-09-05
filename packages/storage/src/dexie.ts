@@ -8,6 +8,8 @@ import type {
 import type {
   CommitScanOptions,
   FileCursor,
+  UsagePageQuery,
+  UsagePageResult,
   UsageQuery,
   UsageRepository,
 } from "./repository";
@@ -31,6 +33,14 @@ class AiUsageDatabase extends Dexie {
       records: "id,timestamp,source,model,projectKey,sourcePath",
       buckets: "id,bucketStart,source,model,projectKey",
       cursors: "key,source,path",
+      projects: "key,lastActiveAt",
+      sessions: "id,source,lastActiveAt",
+    });
+    this.version(3).stores({
+      records:
+        "id,timestamp,source,model,projectKey,sourcePath,[timestamp+id],[source+timestamp+id],[model+timestamp+id],[projectKey+timestamp+id]",
+      buckets: "id,bucketStart,source,model,projectKey",
+      cursors: "key,source,path,logicalId",
       projects: "key,lastActiveAt",
       sessions: "id,source,lastActiveAt",
     });
@@ -140,6 +150,27 @@ export class DexieUsageRepository implements UsageRepository {
       .filter((item) => matches(query, item))
       .sort((a, b) => a.timestamp - b.timestamp);
   }
+  async getRecordsPage(query: UsagePageQuery): Promise<UsagePageResult> {
+    const pageSize = Math.max(1, Math.floor(query.pageSize));
+    const requestedPage = Math.max(1, Math.floor(query.page));
+    const collection = this.recordCollection(query);
+    const filtered = collection.filter((item) => matches(query, item));
+    const total = await filtered.count();
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const ordered = query.order === "asc" ? filtered : filtered.reverse();
+    const items = await ordered
+      .offset((page - 1) * pageSize)
+      .limit(pageSize)
+      .toArray();
+    return { items, page, pageSize, total, totalPages };
+  }
+  async getModelOptions(): Promise<string[]> {
+    return [...new Set((await this.db.records.orderBy("model").uniqueKeys()).map(String))];
+  }
+  async getProjectOptions(): Promise<string[]> {
+    return [...new Set((await this.db.records.orderBy("projectKey").uniqueKeys()).map(String))];
+  }
   async getBuckets(query: UsageQuery = {}): Promise<UsageBucket[]> {
     const collection =
       query.from !== undefined || query.to !== undefined
@@ -193,5 +224,46 @@ export class DexieUsageRepository implements UsageRepository {
         ]);
       },
     );
+  }
+  private recordCollection(query: UsageQuery) {
+    const from = query.from ?? Dexie.minKey;
+    const to = query.to ?? Dexie.maxKey;
+    if (query.projectKey)
+      return this.db.records
+        .where("[projectKey+timestamp+id]")
+        .between(
+          [query.projectKey, from, Dexie.minKey],
+          [query.projectKey, to, Dexie.maxKey],
+          true,
+          false,
+        );
+    if (query.model)
+      return this.db.records
+        .where("[model+timestamp+id]")
+        .between(
+          [query.model, from, Dexie.minKey],
+          [query.model, to, Dexie.maxKey],
+          true,
+          false,
+        );
+    if (query.source)
+      return this.db.records
+        .where("[source+timestamp+id]")
+        .between(
+          [query.source, from, Dexie.minKey],
+          [query.source, to, Dexie.maxKey],
+          true,
+          false,
+        );
+    if (query.from !== undefined || query.to !== undefined)
+      return this.db.records
+        .where("[timestamp+id]")
+        .between(
+          [from, Dexie.minKey],
+          [to, Dexie.maxKey],
+          true,
+          false,
+        );
+    return this.db.records.orderBy("[timestamp+id]");
   }
 }

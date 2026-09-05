@@ -12,8 +12,6 @@ function changeLanguage(event: Event): void {
   settings.setLanguage(value === "zh" ? "zh" : "en");
 }
 onMounted(async () => {
-  await store.refreshCollectorStatuses();
-  await store.refresh();
   await store.sync();
 });
 </script>

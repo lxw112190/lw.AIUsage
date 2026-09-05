@@ -1,4 +1,4 @@
-import { aggregateBuckets, type UsageRecord } from "@lw-aiusage/core";
+import { aggregateBuckets } from "@lw-aiusage/core";
 import type {
   Collector,
   CollectorProgress,
@@ -8,6 +8,7 @@ import type { RuntimePlatform, WatchHandle } from "@lw-aiusage/platform";
 import type { UsageRepository } from "@lw-aiusage/storage";
 import { reconcileCollectorFiles } from "./sessionReconcile";
 import { WatchManager } from "./watchManager";
+import { QueryService } from "./query";
 
 export interface SyncResult {
   files: number;
@@ -53,7 +54,13 @@ export class SyncManager {
         onProgress,
       });
       files += discovered.length;
-      const reconciled = await reconcileCollectorFiles(this.repository, collector.source, discovered, cursors);
+      const reconciled = await reconcileCollectorFiles(
+        this.repository,
+        collector.source,
+        collector.fileReconcileMode,
+        discovered,
+        cursors,
+      );
       for (const item of reconciled) {
         if (item.shadowDuplicate) { skipped += 1; continue; }
         const file = item.file;
@@ -147,26 +154,11 @@ export interface DashboardSummary {
 export async function getDashboardSummary(
   repository: UsageRepository,
 ): Promise<DashboardSummary> {
-  const records: UsageRecord[] = await repository.getRecords();
-  const bySource: Record<string, number> = {};
-  for (const record of records)
-    bySource[record.source] =
-      (bySource[record.source] ?? 0) +
-      record.usage.inputTokens +
-      record.usage.cachedInputTokens +
-      record.usage.cacheCreationInputTokens +
-      record.usage.outputTokens +
-      record.usage.reasoningOutputTokens;
-  const { pricingForModel, estimatedCostUsd } =
-    await import("@lw-aiusage/core");
-  const estimated = records.reduce((sum, record) => {
-    const pricing = pricingForModel(record.model);
-    return sum + (pricing ? estimatedCostUsd(record.usage, pricing) : 0);
-  }, 0);
+  const dashboard = await new QueryService(repository).dashboard();
   return {
-    records: records.length,
-    totalTokens: Object.values(bySource).reduce((sum, value) => sum + value, 0),
-    estimatedCostUsd: estimated,
-    bySource,
+    records: dashboard.records,
+    totalTokens: dashboard.totalTokens,
+    estimatedCostUsd: dashboard.estimatedCostUsd,
+    bySource: dashboard.bySource,
   };
 }

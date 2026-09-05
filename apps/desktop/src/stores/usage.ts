@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+import { ref } from "vue";
 import { defineStore } from "pinia";
 import {
   createNodeDevPlatform,
@@ -14,17 +14,10 @@ import {
   DiagnosticsService,
   SyncManager,
 } from "@lw-aiusage/application";
-import {
-  estimatedCostUsd,
-  pricingForModel,
-  projectDisplayName,
-  totalTokens,
-  type AgentSource,
-  type UsageRecord,
-} from "@lw-aiusage/core";
 import { JsonlWorkerParser } from "../workers/jsonlParser";
 
-export const useUsageStore = defineStore("usage", () => {
+/** Runtime-only state. Page records live in usageRecords.ts. */
+export const useUsageStore = defineStore("runtime", () => {
   const repository = new DexieUsageRepository();
   const platform = isWeb2AppRuntime()
     ? createWeb2AppPlatform()
@@ -33,86 +26,27 @@ export const useUsageStore = defineStore("usage", () => {
   const collectors = defaultCollectors();
   const diagnostics = new DiagnosticsService();
   const manager = new SyncManager(platform, repository, collectors, parser);
-  const records = ref<UsageRecord[]>([]);
   const collectorStatuses = ref<CollectorDetectionResult[]>([]);
   const syncing = ref(false);
   const lastSync = ref<number>();
   const error = ref<string>();
-  const sourceFilter = ref<AgentSource | "">("");
-  const modelFilter = ref("");
-  const projectFilter = ref("");
-  const fromDate = ref("");
-  const toDate = ref("");
+  const dataRevision = ref(0);
   let watchHandle: WatchHandle | undefined;
-  const total = computed(() =>
-    records.value.reduce((sum, record) => sum + totalTokens(record.usage), 0),
-  );
-  const byAgent = computed(() =>
-    records.value.reduce<Record<string, number>>((result, record) => {
-      result[record.source] =
-        (result[record.source] ?? 0) + totalTokens(record.usage);
-      return result;
-    }, {}),
-  );
-  const estimatedCost = computed(() =>
-    records.value.reduce((sum, record) => {
-      const pricing = pricingForModel(record.model);
-      return sum + (pricing ? estimatedCostUsd(record.usage, pricing) : 0);
-    }, 0),
-  );
-  const modelOptions = computed(() =>
-    [...new Set(records.value.map((record) => record.model))].sort(),
-  );
-  const projectOptions = computed(() =>
-    [...new Set(records.value.map((record) => record.projectKey))]
-      .sort()
-      .map((key) => ({ key, name: projectDisplayName(key) })),
-  );
-  const modelStats = computed(() =>
-    groupStats(records.value, (record) => record.model),
-  );
-  const projectStats = computed(() =>
-    groupStats(records.value, (record) => record.projectKey),
-  );
-  const filteredRecords = computed(() => {
-    const from = fromDate.value
-      ? new Date(`${fromDate.value}T00:00:00`).getTime()
-      : undefined;
-    const to = toDate.value
-      ? new Date(`${toDate.value}T23:59:59.999`).getTime()
-      : undefined;
-    return records.value.filter(
-      (record) =>
-        (!sourceFilter.value || record.source === sourceFilter.value) &&
-        (!modelFilter.value || record.model === modelFilter.value) &&
-        (!projectFilter.value || record.projectKey === projectFilter.value) &&
-        (from === undefined || record.timestamp >= from) &&
-        (to === undefined || record.timestamp <= to),
-    );
-  });
-  function clearFilters(): void {
-    sourceFilter.value = "";
-    modelFilter.value = "";
-    projectFilter.value = "";
-    fromDate.value = "";
-    toDate.value = "";
-  }
-  async function refresh(): Promise<void> {
-    records.value = await repository.getRecords();
-  }
+
   async function refreshCollectorStatuses(): Promise<void> {
     collectorStatuses.value = await detectCollectors(platform, collectors);
   }
   async function rebuild(): Promise<void> {
     await repository.resetStatistics();
-    await refresh();
+    dataRevision.value += 1;
     await sync();
   }
   async function resetLocalData(): Promise<void> {
     await repository.resetStatistics();
-    await refresh();
+    dataRevision.value += 1;
   }
   async function sync(): Promise<void> {
+    if (syncing.value) return;
     syncing.value = true;
     error.value = undefined;
     diagnostics.add("INFO", "Usage sync started");
@@ -121,7 +55,7 @@ export const useUsageStore = defineStore("usage", () => {
       const result = await manager.sync();
       for (const message of result.diagnostics)
         diagnostics.add("WARN", message, "collector");
-      await refresh();
+      dataRevision.value += 1;
       await refreshCollectorStatuses();
       lastSync.value = Date.now();
       diagnostics.add(
@@ -133,7 +67,7 @@ export const useUsageStore = defineStore("usage", () => {
           for (const message of watchResult.diagnostics)
             diagnostics.add("WARN", message, "collector");
           if (watchResult.inserted > 0) {
-            void refresh();
+            dataRevision.value += 1;
             lastSync.value = Date.now();
           }
         });
@@ -145,9 +79,7 @@ export const useUsageStore = defineStore("usage", () => {
     }
   }
   function exportDiagnostics(): void {
-    const blob = new Blob([diagnostics.exportJson()], {
-      type: "application/json",
-    });
+    const blob = new Blob([diagnostics.exportJson()], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -156,26 +88,11 @@ export const useUsageStore = defineStore("usage", () => {
     URL.revokeObjectURL(url);
   }
   return {
-    records,
-    filteredRecords,
     collectorStatuses,
     syncing,
     lastSync,
     error,
-    total,
-    byAgent,
-    estimatedCost,
-    modelOptions,
-    projectOptions,
-    modelStats,
-    projectStats,
-    sourceFilter,
-    modelFilter,
-    projectFilter,
-    fromDate,
-    toDate,
-    clearFilters,
-    refresh,
+    dataRevision,
     refreshCollectorStatuses,
     sync,
     rebuild,
@@ -183,31 +100,3 @@ export const useUsageStore = defineStore("usage", () => {
     exportDiagnostics,
   };
 });
-
-function groupStats(
-  records: readonly UsageRecord[],
-  keyOf: (record: UsageRecord) => string,
-): Array<{ key: string; records: number; tokens: number; cost: number }> {
-  const groups = new Map<
-    string,
-    { key: string; records: number; tokens: number; cost: number }
-  >();
-  for (const record of records) {
-    const key = keyOf(record);
-    const current = groups.get(key);
-    const pricing = pricingForModel(record.model);
-    const cost = pricing ? estimatedCostUsd(record.usage, pricing) : 0;
-    if (current) {
-      current.records += 1;
-      current.tokens += totalTokens(record.usage);
-      current.cost += cost;
-    } else
-      groups.set(key, {
-        key,
-        records: 1,
-        tokens: totalTokens(record.usage),
-        cost,
-      });
-  }
-  return [...groups.values()].sort((left, right) => right.tokens - left.tokens);
-}

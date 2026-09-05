@@ -1,5 +1,5 @@
 import { logicalSessionKey, type AgentSource } from "@lw-aiusage/core";
-import type { CollectorFile } from "@lw-aiusage/collectors";
+import type { CollectorFile, FileReconcileMode } from "@lw-aiusage/collectors";
 import type { FileCursor, UsageRepository } from "@lw-aiusage/storage";
 
 export interface ReconciledFile {
@@ -20,18 +20,37 @@ function preferredFile(left: CollectorFile, right: CollectorFile): CollectorFile
   return left.path.localeCompare(right.path) <= 0 ? left : right;
 }
 
-export async function reconcileCollectorFiles(
+export function reconcileCollectorFiles(
+  repository: UsageRepository,
+  source: AgentSource,
+  mode: FileReconcileMode,
+  files: readonly CollectorFile[],
+  cursors: readonly FileCursor[],
+): Promise<ReconciledFile[]>;
+export function reconcileCollectorFiles(
   repository: UsageRepository,
   source: AgentSource,
   files: readonly CollectorFile[],
   cursors: readonly FileCursor[],
+): Promise<ReconciledFile[]>;
+export async function reconcileCollectorFiles(
+  repository: UsageRepository,
+  source: AgentSource,
+  modeOrFiles: FileReconcileMode | readonly CollectorFile[],
+  filesOrCursors: readonly CollectorFile[] | readonly FileCursor[],
+  maybeCursors?: readonly FileCursor[],
 ): Promise<ReconciledFile[]> {
+  const mode: FileReconcileMode = typeof modeOrFiles === "string" ? modeOrFiles : "logical-singleton";
+  const files = (typeof modeOrFiles === "string" ? filesOrCursors : modeOrFiles) as readonly CollectorFile[];
+  const cursors = (typeof modeOrFiles === "string" ? maybeCursors : filesOrCursors) as readonly FileCursor[];
   const cursorByPath = new Map(cursors.filter((cursor) => cursor.source === source).map((cursor) => [cursor.path, cursor]));
   const cursorByLogicalId = new Map<string, FileCursor>();
-  for (const cursor of cursorByPath.values()) {
-    const logicalId = cursorLogicalId(cursor);
-    if (logicalId) cursorByLogicalId.set(logicalSessionKey(source, logicalId), cursor);
-  }
+  if (mode === "logical-singleton")
+    for (const cursor of cursorByPath.values()) {
+      const logicalId = cursorLogicalId(cursor);
+      if (logicalId)
+        cursorByLogicalId.set(logicalSessionKey(source, logicalId), cursor);
+    }
   const winnerByLogicalId = new Map<string, CollectorFile>();
   for (const file of files) {
     if (!file.logicalId) continue;
@@ -44,7 +63,9 @@ export async function reconcileCollectorFiles(
   const migratedCursorKeys = new Set<string>();
   const result: ReconciledFile[] = [];
   for (const file of files) {
-    const winner = file.logicalId ? winnerByLogicalId.get(logicalSessionKey(source, file.logicalId)) : undefined;
+    const winner = mode === "logical-singleton" && file.logicalId
+      ? winnerByLogicalId.get(logicalSessionKey(source, file.logicalId))
+      : undefined;
     if (winner && winner.path !== file.path) {
       result.push({ file, migrated: false, shadowDuplicate: true });
       continue;

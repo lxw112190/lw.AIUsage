@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { AgentSource } from "@lw-aiusage/core";
 import { useUsageStore } from "../stores/usage";
+import { useOverviewStore } from "../stores/overview";
 import { useI18n } from "../i18n";
 
 const store = useUsageStore();
+const overview = useOverviewStore();
 const { t } = useI18n();
 const statusFor = (source: AgentSource): string =>
   t(
@@ -31,7 +33,7 @@ const statusFor = (source: AgentSource): string =>
           <div>
             <dt>{{ t("agents.records") }}</dt>
             <dd>
-              {{ store.records.filter((r) => r.source === "codex").length }}
+              {{ overview.data.bySourceRecords.codex ?? 0 }}
             </dd>
           </div>
           <div>
@@ -51,7 +53,7 @@ const statusFor = (source: AgentSource): string =>
           <div>
             <dt>{{ t("agents.records") }}</dt>
             <dd>
-              {{ store.records.filter((r) => r.source === "claude").length }}
+              {{ overview.data.bySourceRecords.claude ?? 0 }}
             </dd>
           </div>
           <div>

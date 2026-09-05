@@ -1,6 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { MemoryUsageRepository, type FileCursor } from "./repository";
 
+describe("repository pagination", () => {
+  it("paginates in stable descending timestamp and id order", async () => {
+    const repository = new MemoryUsageRepository();
+    const usage = { inputTokens: 1, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 };
+    await repository.putRecords([
+      { id: "b", source: "codex", timestamp: 2, model: "gpt-5", projectKey: "p", usage },
+      { id: "a", source: "codex", timestamp: 2, model: "gpt-5", projectKey: "p", usage },
+      { id: "c", source: "claude", timestamp: 1, model: "claude-sonnet-4", projectKey: "q", usage },
+    ]);
+    const first = await repository.getRecordsPage({ page: 1, pageSize: 2 });
+    const second = await repository.getRecordsPage({ page: 2, pageSize: 2 });
+    expect(first.items.map((record) => record.id)).toEqual(["b", "a"]);
+    expect(second.items.map((record) => record.id)).toEqual(["c"]);
+    expect(first.total).toBe(3);
+  });
+  it("applies source, model, project and half-open date filters", async () => {
+    const repository = new MemoryUsageRepository();
+    const usage = { inputTokens: 1, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 };
+    await repository.putRecords([
+      { id: "a", source: "codex", timestamp: 100, model: "gpt-5", projectKey: "p", usage },
+      { id: "b", source: "codex", timestamp: 200, model: "gpt-5", projectKey: "p", usage },
+      { id: "c", source: "claude", timestamp: 200, model: "gpt-5", projectKey: "p", usage },
+    ]);
+    const result = await repository.getRecordsPage({ page: 1, pageSize: 20, source: "codex", model: "gpt-5", projectKey: "p", from: 100, to: 200 });
+    expect(result.items.map((record) => record.id)).toEqual(["a"]);
+  });
+});
+
 describe("repository scan commit", () => {
   it("is safe to repeat after a retry", async () => {
     const repository = new MemoryUsageRepository();

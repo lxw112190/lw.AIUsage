@@ -35,6 +35,18 @@ export interface UsageQuery {
   model?: string;
   projectKey?: string;
 }
+export interface UsagePageQuery extends UsageQuery {
+  page: number;
+  pageSize: number;
+  order?: "asc" | "desc";
+}
+export interface UsagePageResult {
+  items: UsageRecord[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
 export interface UsageRepository {
   putRecords(records: readonly UsageRecord[]): Promise<number>;
   commitScan(
@@ -44,6 +56,9 @@ export interface UsageRepository {
   ): Promise<number>;
   migrateFileCursor(oldCursor: FileCursor, newFile: MigratedFile): Promise<FileCursor>;
   getRecords(query?: UsageQuery): Promise<UsageRecord[]>;
+  getRecordsPage(query: UsagePageQuery): Promise<UsagePageResult>;
+  getModelOptions(): Promise<string[]>;
+  getProjectOptions(): Promise<string[]>;
   getBuckets(query?: UsageQuery): Promise<UsageBucket[]>;
   putBuckets(buckets: readonly UsageBucket[]): Promise<void>;
   getCursors(): Promise<FileCursor[]>;
@@ -110,6 +125,41 @@ export class MemoryUsageRepository implements UsageRepository {
           (!query.projectKey || record.projectKey === query.projectKey),
       )
       .sort((a, b) => a.timestamp - b.timestamp);
+  }
+  async getRecordsPage(query: UsagePageQuery): Promise<UsagePageResult> {
+    const pageSize = Math.max(1, Math.floor(query.pageSize));
+    const page = Math.max(1, Math.floor(query.page));
+    const items = [...this.records.values()]
+      .filter(
+        (record) =>
+          (query.from === undefined || record.timestamp >= query.from) &&
+          (query.to === undefined || record.timestamp < query.to) &&
+          (!query.source || record.source === query.source) &&
+          (!query.model || record.model === query.model) &&
+          (!query.projectKey || record.projectKey === query.projectKey),
+      )
+      .sort((left, right) => {
+        const timestamp = left.timestamp - right.timestamp;
+        if (timestamp !== 0) return query.order === "asc" ? timestamp : -timestamp;
+        const id = left.id.localeCompare(right.id);
+        return query.order === "asc" ? id : -id;
+      });
+    const total = items.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, totalPages);
+    return {
+      items: items.slice((safePage - 1) * pageSize, safePage * pageSize),
+      page: safePage,
+      pageSize,
+      total,
+      totalPages,
+    };
+  }
+  async getModelOptions(): Promise<string[]> {
+    return [...new Set([...this.records.values()].map((record) => record.model))].sort();
+  }
+  async getProjectOptions(): Promise<string[]> {
+    return [...new Set([...this.records.values()].map((record) => record.projectKey))].sort();
   }
   async getBuckets(query: UsageQuery = {}): Promise<UsageBucket[]> {
     return [...this.buckets.values()]

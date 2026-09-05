@@ -54,7 +54,8 @@ async function recursiveJsonl(
 export class CodexCollector implements Collector {
   readonly source = "codex" as const;
   readonly name = "Codex";
-  readonly parserVersion = 3;
+  readonly parserVersion = 4;
+  readonly fileReconcileMode = "logical-singleton" as const;
   private readonly sessionTotals = new Map<string, TokenUsage>();
   async roots(context: CollectorContext): Promise<string[]> {
     const home = await context.platform.paths.home();

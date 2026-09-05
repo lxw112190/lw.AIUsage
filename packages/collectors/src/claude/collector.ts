@@ -48,7 +48,8 @@ async function recursiveJsonl(
 export class ClaudeCollector implements Collector {
   readonly source = "claude" as const;
   readonly name = "Claude Code";
-  readonly parserVersion = 3;
+  readonly parserVersion = 4;
+  readonly fileReconcileMode = "path" as const;
   async roots(context: CollectorContext): Promise<string[]> {
     const home = await context.platform.paths.home();
     return [`${home}/.claude/projects`];

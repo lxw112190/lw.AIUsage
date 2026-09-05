@@ -25,8 +25,13 @@ export class WatchManager {
   private async reconcileInternal(): Promise<void> {
     const desired = new Map<string, { source: AgentSource; root: string }>();
     for (const collector of this.collectors) {
-      const detection = await collector.detect({ platform: this.platform });
-      for (const root of detection.roots) if (await this.platform.fs.exists(root)) desired.set(`${collector.source}:${root}`, { source: collector.source, root });
+      const roots = await collector.roots({ platform: this.platform });
+      for (const root of roots)
+        if (await this.platform.fs.exists(root))
+          desired.set(`${collector.source}:${root}`, {
+            source: collector.source,
+            root,
+          });
     }
     for (const [key, handle] of this.handles) {
       if (!desired.has(key)) { await handle.close(); this.handles.delete(key); }

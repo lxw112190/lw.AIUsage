@@ -31,6 +31,7 @@ export interface CollectorFile extends FileEntry {
   /** Stable logical identity independent of the current filesystem path. */
   logicalId?: string;
 }
+export type FileReconcileMode = "path" | "logical-singleton";
 export interface FileScanContext extends CollectorContext {
   file: CollectorFile;
 }
@@ -44,7 +45,9 @@ export interface Collector {
   readonly source: AgentSource;
   readonly name: string;
   readonly parserVersion: number;
+  readonly fileReconcileMode: FileReconcileMode;
   detect(context: CollectorContext): Promise<CollectorDetection>;
+  roots(context: CollectorContext): Promise<string[]>;
   discoverFiles(context: CollectorContext): Promise<CollectorFile[]>;
   scanFile(context: FileScanContext): Promise<FileScanResult>;
 }

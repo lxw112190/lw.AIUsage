@@ -27,4 +27,13 @@ describe("session file reconciliation", () => {
     expect(results.find((item) => item.file.path === older.path)?.shadowDuplicate).toBe(true);
     expect(results.find((item) => item.file.path === archived.path)?.shadowDuplicate).toBeUndefined();
   });
+
+  it("keeps multiple Claude files for the same session", async () => {
+    const repository = new MemoryUsageRepository();
+    const first = { ...file("/fixture/.claude/projects/p/main.jsonl", 100, 1), source: "claude" as const };
+    const subagent = { ...file("/fixture/.claude/projects/p/subagents/a.jsonl", 200, 2), source: "claude" as const };
+    const results = await reconcileCollectorFiles(repository, "claude", "path", [first, subagent], []);
+    expect(results).toHaveLength(2);
+    expect(results.every((item) => !item.shadowDuplicate)).toBe(true);
+  });
 });
