@@ -24,7 +24,7 @@ describe("Codex event taxonomy", () => {
 
     expect(summary.outerTypes).toEqual({ response_item: 1, event_msg: 1 });
     expect(summary.payloadTypes).toEqual({ message: 1, token_count: 1 });
-    expect(summary.semanticTypes).toEqual({ message: 1, token_count: 1 });
+    expect(summary.semanticTypes).toEqual({ response_item: 1, token_count: 1 });
     expect(summary.tokenCountEvents).toBe(1);
   });
 });

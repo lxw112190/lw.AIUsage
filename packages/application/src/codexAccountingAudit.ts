@@ -26,6 +26,12 @@ export interface CodexRecordMismatchSummary {
   databaseOnlySamples: string[];
 }
 
+interface RecordSetDiff {
+  mirrorOnlyIds: Set<string>;
+  databaseOnlyIds: Set<string>;
+  contentMismatchIds: Set<string>;
+}
+
 export interface CodexRecordReconciliation {
   recordIdentityMatched: boolean;
   recordContentMatched: boolean;
@@ -38,7 +44,7 @@ export interface CodexRecordReconciliation {
 
 export interface CodexAccountingAuditReport {
   auditVersion: 3;
-  auditRevision: 4;
+  auditRevision: 5;
   parserVersion: 4;
   accounting: "codex-accounting-audit-v3";
   generatedAt: number;
@@ -118,12 +124,15 @@ export class CodexAccountingAuditService {
     const database = await this.repository.getSourceUsageSummary("codex");
     const databaseRecords = await this.repository.getSourceAuditRecords("codex");
     const canonicalExtracted = canonicalizeMirrorFiles(extracted);
+    const canonicalPaths = new Set(canonicalExtracted.map((file) => file.entry.path));
+    const canonicalCursors = cursors.filter((cursor) => cursor.source === "codex" && canonicalPaths.has(cursor.path));
+    const recordDiff = buildRecordSetDiff([...mirror.records.values()], databaseRecords);
     const eventTaxonomy = summarizeCodexExtractedEvents(canonicalExtracted);
     const forkHistory = auditCodexForkHistory(
       mirror.forkTraces,
-      cursors.filter((cursor) => cursor.source === "codex"),
+      canonicalCursors,
       [...mirror.records.values()],
-      new Set(databaseRecords.map((record) => record.id)),
+      recordDiff,
     );
     const payloadUsageOverlap = auditCodexPayloadUsageOverlap(extracted);
     const recordReconciliation = compareRecords([...mirror.records.values()], databaseRecords);
@@ -137,7 +146,7 @@ export class CodexAccountingAuditService {
     const sessionCountMatched = mirror.sessionCount === database.sessionCount;
     return {
       auditVersion: 3,
-      auditRevision: 4,
+      auditRevision: 5,
       parserVersion: 4,
       accounting: "codex-accounting-audit-v3",
       generatedAt: Date.now(),
@@ -194,6 +203,22 @@ function signatureFingerprint(signatures: readonly string[]): string {
   return stableHash(signatures.join("\n"));
 }
 
+function buildRecordSetDiff(
+  mirrorRecords: readonly ParserV4MirrorRecord[],
+  databaseRecords: readonly SourceAuditRecord[],
+): RecordSetDiff {
+  const mirrorById = new Map(mirrorRecords.map((record) => [record.id, record]));
+  const databaseById = new Map(databaseRecords.map((record) => [record.id, record]));
+  const mirrorOnlyIds = new Set([...mirrorById.keys()].filter((id) => !databaseById.has(id)));
+  const databaseOnlyIds = new Set([...databaseById.keys()].filter((id) => !mirrorById.has(id)));
+  const contentMismatchIds = new Set([...mirrorById.keys()].filter((id) => {
+    const left = mirrorById.get(id);
+    const right = databaseById.get(id);
+    return !!left && !!right && accountingSignature(left) !== accountingSignature(right);
+  }));
+  return { mirrorOnlyIds, databaseOnlyIds, contentMismatchIds };
+}
+
 export function compareRecords(
   mirrorRecords: readonly ParserV4MirrorRecord[],
   databaseRecords: readonly SourceAuditRecord[],
@@ -204,17 +229,12 @@ export function compareRecords(
   const databaseIdentity = database.map(identitySignature);
   const mirrorContent = mirror.map(accountingSignature);
   const databaseContent = database.map(accountingSignature);
+  const recordDiff = buildRecordSetDiff(mirror, database);
   const recordIdentityMatched = mirror.length === database.length && mirrorIdentity.every((value, index) => value === databaseIdentity[index]);
   const recordContentMatched = mirror.length === database.length && mirrorContent.every((value, index) => value === databaseContent[index]);
-  const mirrorById = new Map(mirror.map((record) => [record.id, record]));
-  const databaseById = new Map(database.map((record) => [record.id, record]));
-  const mirrorOnly = [...mirrorById.keys()].filter((id) => !databaseById.has(id));
-  const databaseOnly = [...databaseById.keys()].filter((id) => !mirrorById.has(id));
-  const contentMismatch = [...mirrorById.keys()].filter((id) => {
-    const left = mirrorById.get(id);
-    const right = databaseById.get(id);
-    return !!left && !!right && accountingSignature(left) !== accountingSignature(right);
-  });
+  const mirrorOnly = [...recordDiff.mirrorOnlyIds];
+  const databaseOnly = [...recordDiff.databaseOnlyIds];
+  const contentMismatch = [...recordDiff.contentMismatchIds];
   return {
     recordIdentityMatched,
     recordContentMatched,

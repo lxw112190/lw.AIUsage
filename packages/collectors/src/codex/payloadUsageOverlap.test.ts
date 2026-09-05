@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditCodexPayloadUsageOverlap } from "./payloadUsageOverlap";
+import { auditCodexPayloadUsageOverlap, collectTokenCountRefs } from "./payloadUsageOverlap";
 import type { CodexExtractedEvent, CodexExtractedFile } from "./rawAuditTypes";
 
 const entry = (path: string) => ({ path, name: path.split("/").at(-1) ?? path, isFile: true, isDirectory: false, size: 1, modifiedAt: 1 });
@@ -24,6 +24,16 @@ const payload = (index: number, timestamp: number, input: number, ids: Record<st
   resolvedSessionId: "session",
   source: "payload-usage",
 });
+const totalToken = (index: number, timestamp: number, input: number): CodexExtractedEvent => ({
+  raw: { type: "token_count", timestamp, payload: { model: "gpt-5", info: { total_token_usage: counters(input) } } },
+  eventIndex: index,
+  eventType: "token_count",
+  semanticType: "token_count",
+  isTokenCount: true,
+  resolvedModel: "gpt-5",
+  resolvedSessionId: "session",
+  source: "token-count",
+});
 const file = (events: CodexExtractedEvent[]): CodexExtractedFile => ({ entry: entry("/fixture/session.jsonl"), snapshotSize: 1, finalSessionId: "session", events });
 
 describe("Codex payload usage overlap", () => {
@@ -46,16 +56,32 @@ describe("Codex payload usage overlap", () => {
       payload(14, 1_700_000_019_400, 60),
     ])]);
 
-    expect(report.exact.events).toBe(2);
-    expect(report.probable.events).toBe(2);
-    expect(report.possible.events).toBe(1);
-    expect(report.ambiguous.events).toBe(1);
-    expect(report.unmatched.events).toBe(1);
+    expect(report.duplicateClassification.confirmed.events).toBe(1);
+    expect(report.duplicateClassification.probable.events).toBe(3);
+    expect(report.duplicateClassification.possible.events).toBe(1);
+    expect(report.duplicateClassification.ambiguous.events).toBe(1);
+    expect(report.duplicateClassification.weakCandidate.events).toBe(1);
+    expect(report.linkSummary.exact.events).toBe(1);
+    expect(report.linkSummary.probable.events).toBe(3);
+    expect(report.linkSummary.possible.events).toBe(1);
+    expect(report.linkSummary.weak.events).toBe(1);
     expect(report.byEvidence["same-total-near-time"]?.events).toBe(1);
     expect(report.payloadTokenInvariant).toBe(true);
     expect(report.payloadTokens).toBe(10 + 20 + 30 + 40 + 20 + 50 + 60);
     expect(report.payloadTokens).toBe(
-      report.exact.tokens + report.probable.tokens + report.possible.tokens + report.ambiguous.tokens + report.unmatched.tokens,
+      Object.values(report.duplicateClassification).reduce((sum, count) => sum + count.tokens, 0),
     );
+  });
+
+  it("derives total-only TokenCount contributions instead of matching cumulative snapshots", () => {
+    const refs = collectTokenCountRefs([file([
+      totalToken(0, 1_700_000_000_000, 100),
+      totalToken(1, 1_700_000_001_000, 150),
+      totalToken(2, 1_700_000_002_000, 150),
+      totalToken(3, 1_700_000_003_000, 50),
+    ])]);
+
+    expect(refs.map((ref) => ref.usage.inputTokens)).toEqual([100, 50, 0, 50]);
+    expect(refs.map((ref) => ref.hasTokenContribution)).toEqual([true, true, false, true]);
   });
 });

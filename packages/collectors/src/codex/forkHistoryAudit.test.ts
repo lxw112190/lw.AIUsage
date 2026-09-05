@@ -25,6 +25,7 @@ describe("Codex fork history audit", () => {
     const trace: V4ForkTrace = {
       childSessionId: "child",
       parentSessionId: "parent",
+      firstUsageEventId: "child-extra",
       baselineUsed: usage(1_000),
       firstTotal: usage(1_200),
       firstContribution: usage(200),
@@ -33,7 +34,7 @@ describe("Codex fork history audit", () => {
       [trace],
       [{ parserState: { sessionId: "child", forkedFromSessionId: "parent", forkBaselineUsage: usage(1_200) } }],
       [record("child-extra", "child", 200)],
-      new Set(),
+      { mirrorOnlyIds: new Set(["child-extra"]), databaseOnlyIds: new Set(), contentMismatchIds: new Set() },
     );
 
     expect(report.forkSessions).toBe(1);
@@ -50,11 +51,25 @@ describe("Codex fork history audit", () => {
       [{ childSessionId: "child", parentSessionId: "parent", baselineUsed: usage(1_000), firstTotal: usage(1_200), firstContribution: usage(200) }],
       [{ parserState: { sessionId: "child", forkedFromSessionId: "parent", forkBaselineUsage: usage(1_000) } }],
       [record("child-extra", "child", 100)],
-      new Set(),
+      { mirrorOnlyIds: new Set(["child-extra"]), databaseOnlyIds: new Set(), contentMismatchIds: new Set() },
     );
 
     expect(report.baselineMatched).toBe(1);
     expect(report.explainedMirrorOnlyRecords).toBe(0);
     expect(report.unexplainedMirrorOnlyRecords).toBe(1);
+  });
+
+  it("compares fork baselines component by component", () => {
+    const report = auditCodexForkHistory(
+      [{ childSessionId: "child", parentSessionId: "parent", baselineUsed: usage(200), firstTotal: usage(300), firstContribution: usage(100) }],
+      [{ parserState: { sessionId: "child", forkedFromSessionId: "parent", forkBaselineUsage: { ...usage(100), cachedInputTokens: 100 } } }],
+      [],
+      { mirrorOnlyIds: new Set(), databaseOnlyIds: new Set(), contentMismatchIds: new Set() },
+    );
+
+    expect(report.baselineMatched).toBe(0);
+    expect(report.baselineDifferent).toBe(1);
+    expect(report.items[0]?.baselineDifferenceNetTokens).toBe(0);
+    expect(report.items[0]?.baselineDifferenceMagnitudeTokens).toBe(200);
   });
 });

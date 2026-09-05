@@ -2,6 +2,14 @@ import { totalTokens, type TokenUsage } from "@lw-aiusage/core";
 import { stableHash } from "../shared/identity";
 import type { ParserV4MirrorRecord, V4ForkTrace } from "./rawAuditTypes";
 
+export type CodexForkOutcome =
+  | "full-replay-only"
+  | "persisted-only"
+  | "both-same"
+  | "both-different"
+  | "neither"
+  | "unresolved";
+
 export interface CodexForkHistoryAuditItem {
   childSessionHash: string;
   parentSessionHash?: string;
@@ -9,11 +17,16 @@ export interface CodexForkHistoryAuditItem {
   fullReplayBaseline?: TokenUsage;
   baselineDifference?: TokenUsage;
   baselineDifferenceTokens: number;
+  baselineDifferenceNetTokens: number;
+  baselineDifferenceMagnitudeTokens: number;
   childFirstTotal?: TokenUsage;
   childFirstLast?: TokenUsage;
   persistedContribution?: TokenUsage;
   fullReplayContribution?: TokenUsage;
   contributionDifferenceTokens: number;
+  contributionMatched: boolean;
+  outcome: CodexForkOutcome;
+  mirrorOnlyRecordHash?: string;
   mirrorOnlyRecordHashes: string[];
   baselineMatched: boolean;
   explainsMirrorOnly: boolean;
@@ -28,6 +41,8 @@ export interface CodexForkHistoryAudit {
   explainedMirrorOnlyRecords: number;
   unexplainedMirrorOnlyRecords: number;
   explainedTokens: number;
+  forkMirrorOnlyInvariant: boolean;
+  globalMirrorOnlyExplainedPercent: number;
   items: CodexForkHistoryAuditItem[];
 }
 
@@ -39,7 +54,21 @@ interface ForkCursorLike {
   };
 }
 
+interface RecordSetDiffLike {
+  mirrorOnlyIds: ReadonlySet<string>;
+  databaseOnlyIds: ReadonlySet<string>;
+  contentMismatchIds: ReadonlySet<string>;
+}
+
 const cloneUsage = (value: TokenUsage): TokenUsage => ({ ...value });
+const hasTokens = (value: TokenUsage | undefined): value is TokenUsage =>
+  !!value && totalTokens(value) > 0;
+const sameUsageExact = (left: TokenUsage, right: TokenUsage): boolean =>
+  left.inputTokens === right.inputTokens &&
+  left.cachedInputTokens === right.cachedInputTokens &&
+  left.cacheCreationInputTokens === right.cacheCreationInputTokens &&
+  left.outputTokens === right.outputTokens &&
+  left.reasoningOutputTokens === right.reasoningOutputTokens;
 const subtractPositive = (left: TokenUsage, right: TokenUsage): TokenUsage => ({
   inputTokens: Math.max(left.inputTokens - right.inputTokens, 0),
   cachedInputTokens: Math.max(left.cachedInputTokens - right.cachedInputTokens, 0),
@@ -54,12 +83,39 @@ const subtractSigned = (left: TokenUsage, right: TokenUsage): TokenUsage => ({
   outputTokens: left.outputTokens - right.outputTokens,
   reasoningOutputTokens: left.reasoningOutputTokens - right.reasoningOutputTokens,
 });
+const usageDifferenceMagnitude = (value: TokenUsage): number =>
+  Math.abs(value.inputTokens) +
+  Math.abs(value.cachedInputTokens) +
+  Math.abs(value.cacheCreationInputTokens) +
+  Math.abs(value.outputTokens) +
+  Math.abs(value.reasoningOutputTokens);
+
+function outcomeOf(
+  firstReplayRecord: ParserV4MirrorRecord | undefined,
+  persistedContribution: TokenUsage | undefined,
+  fullReplayContribution: TokenUsage | undefined,
+  contentMismatchIds: ReadonlySet<string>,
+): CodexForkOutcome {
+  if (!firstReplayRecord || (!persistedContribution && !fullReplayContribution))
+    return "unresolved";
+  const persistedEmitsRecord = hasTokens(persistedContribution);
+  const fullReplayEmitsRecord = hasTokens(fullReplayContribution);
+  if (fullReplayEmitsRecord && !persistedEmitsRecord && contentMismatchIds.has(firstReplayRecord.id))
+    return "both-different";
+  if (fullReplayEmitsRecord && !persistedEmitsRecord) return "full-replay-only";
+  if (!fullReplayEmitsRecord && persistedEmitsRecord) return "persisted-only";
+  if (persistedEmitsRecord && fullReplayEmitsRecord)
+    return sameUsageExact(persistedContribution!, fullReplayContribution!)
+      ? "both-same"
+      : "both-different";
+  return "neither";
+}
 
 export function auditCodexForkHistory(
   traces: readonly V4ForkTrace[],
   cursors: readonly ForkCursorLike[],
   mirrorRecords: readonly ParserV4MirrorRecord[],
-  databaseRecordIds: ReadonlySet<string>,
+  recordDiff: RecordSetDiffLike,
 ): CodexForkHistoryAudit {
   const persisted = new Map<string, { parent?: string; baseline?: TokenUsage }>();
   for (const cursor of cursors) {
@@ -69,6 +125,11 @@ export function auditCodexForkHistory(
   }
   const traceByChild = new Map(traces.map((trace) => [trace.childSessionId, trace]));
   const childIds = new Set([...persisted.keys(), ...traces.map((trace) => trace.childSessionId)]);
+  const forkMirrorOnlyIds = new Set(
+    mirrorRecords
+      .filter((record) => !!record.sessionId && childIds.has(record.sessionId) && recordDiff.mirrorOnlyIds.has(record.id))
+      .map((record) => record.id),
+  );
   const items: CodexForkHistoryAuditItem[] = [];
   let persistedBaselineAvailable = 0;
   let fullReplayBaselineAvailable = 0;
@@ -87,29 +148,39 @@ export function auditCodexForkHistory(
     const baselineDifference = persistedBaseline && fullReplayBaseline
       ? subtractSigned(fullReplayBaseline, persistedBaseline)
       : undefined;
-    const baselineDifferenceTokens = baselineDifference ? totalTokens(baselineDifference) : 0;
-    const baselineMatchedValue = !!persistedBaseline && !!fullReplayBaseline && baselineDifferenceTokens === 0;
+    const baselineDifferenceNetTokens = baselineDifference ? totalTokens(baselineDifference) : 0;
+    const baselineDifferenceMagnitudeTokens = baselineDifference
+      ? usageDifferenceMagnitude(baselineDifference)
+      : 0;
+    const baselineMatchedValue = !!persistedBaseline && !!fullReplayBaseline && sameUsageExact(persistedBaseline, fullReplayBaseline);
     if (baselineMatchedValue) baselineMatched += 1;
     else if (persistedBaseline && fullReplayBaseline) baselineDifferent += 1;
-    const mirrorOnly = mirrorRecords.filter((record) => record.sessionId === childSessionId && !databaseRecordIds.has(record.id));
-    const mirrorOnlyTokens = mirrorOnly.reduce((sum, record) => sum + totalTokens(record.usage), 0);
+    const firstReplayRecord = trace?.firstUsageEventId
+      ? mirrorRecords.find((record) => record.id === trace.firstUsageEventId)
+      : undefined;
     const childFirstTotal = trace?.firstTotal;
     const persistedContribution = childFirstTotal && persistedBaseline
       ? subtractPositive(childFirstTotal, persistedBaseline)
       : undefined;
     const fullReplayContribution = trace?.firstContribution;
-    const contributionDifference = persistedContribution && fullReplayContribution
-      ? subtractSigned(fullReplayContribution, persistedContribution)
-      : undefined;
-    const contributionDifferenceTokens = contributionDifference ? totalTokens(contributionDifference) : 0;
-    const explainsMirrorOnly = mirrorOnlyTokens > 0 &&
-      !!contributionDifference &&
-      Math.abs(contributionDifferenceTokens) === mirrorOnlyTokens;
-    if (explainsMirrorOnly) {
-      explainedMirrorOnlyRecords += mirrorOnly.length;
-      explainedTokens += mirrorOnlyTokens;
-      for (const record of mirrorOnly) explainedMirrorOnlyIds.add(record.id);
+    const contributionMatched = !!persistedContribution && !!fullReplayContribution && sameUsageExact(persistedContribution, fullReplayContribution);
+    const isMirrorOnly = !!firstReplayRecord && recordDiff.mirrorOnlyIds.has(firstReplayRecord.id);
+    const fullReplayEmitsRecord = hasTokens(fullReplayContribution);
+    const persistedEmitsRecord = hasTokens(persistedContribution);
+    const explainsMirrorOnly = isMirrorOnly &&
+      fullReplayEmitsRecord &&
+      !persistedEmitsRecord &&
+      !!trace?.firstContribution &&
+      !!firstReplayRecord &&
+      sameUsageExact(firstReplayRecord.usage, trace.firstContribution);
+    if (explainsMirrorOnly && firstReplayRecord) {
+      explainedMirrorOnlyRecords += 1;
+      explainedTokens += totalTokens(firstReplayRecord.usage);
+      explainedMirrorOnlyIds.add(firstReplayRecord.id);
     }
+    const mirrorOnlyRecordHashes = isMirrorOnly && firstReplayRecord
+      ? [stableHash(firstReplayRecord.id)]
+      : [];
     items.push({
       childSessionHash: stableHash(childSessionId),
       parentSessionHash: (persistedItem?.parent ?? trace?.parentSessionId)
@@ -117,18 +188,27 @@ export function auditCodexForkHistory(
         : undefined,
       persistedBaseline: persistedBaseline ? cloneUsage(persistedBaseline) : undefined,
       fullReplayBaseline: fullReplayBaseline ? cloneUsage(fullReplayBaseline) : undefined,
-      baselineDifference,
-      baselineDifferenceTokens,
+      baselineDifference: baselineDifference ? cloneUsage(baselineDifference) : undefined,
+      baselineDifferenceTokens: baselineDifferenceNetTokens,
+      baselineDifferenceNetTokens,
+      baselineDifferenceMagnitudeTokens,
       childFirstTotal: childFirstTotal ? cloneUsage(childFirstTotal) : undefined,
       childFirstLast: trace?.firstLast ? cloneUsage(trace.firstLast) : undefined,
-      persistedContribution,
+      persistedContribution: persistedContribution ? cloneUsage(persistedContribution) : undefined,
       fullReplayContribution: fullReplayContribution ? cloneUsage(fullReplayContribution) : undefined,
-      contributionDifferenceTokens,
-      mirrorOnlyRecordHashes: mirrorOnly.slice(0, 20).map((record) => stableHash(record.id)),
+      contributionDifferenceTokens: persistedContribution && fullReplayContribution
+        ? totalTokens(subtractSigned(fullReplayContribution, persistedContribution))
+        : 0,
+      contributionMatched,
+      outcome: outcomeOf(firstReplayRecord, persistedContribution, fullReplayContribution, recordDiff.contentMismatchIds),
+      mirrorOnlyRecordHash: mirrorOnlyRecordHashes[0],
+      mirrorOnlyRecordHashes,
       baselineMatched: baselineMatchedValue,
       explainsMirrorOnly,
     });
   }
+  const forkMirrorOnlyRecordCount = forkMirrorOnlyIds.size;
+  const unexplainedMirrorOnlyRecords = [...forkMirrorOnlyIds].filter((id) => !explainedMirrorOnlyIds.has(id)).length;
   return {
     forkSessions: childIds.size,
     persistedBaselineAvailable,
@@ -136,8 +216,12 @@ export function auditCodexForkHistory(
     baselineMatched,
     baselineDifferent,
     explainedMirrorOnlyRecords,
-    unexplainedMirrorOnlyRecords: mirrorRecords.filter((record) => record.sessionId && !databaseRecordIds.has(record.id) && !explainedMirrorOnlyIds.has(record.id)).length,
+    unexplainedMirrorOnlyRecords,
     explainedTokens,
+    forkMirrorOnlyInvariant: explainedMirrorOnlyRecords + unexplainedMirrorOnlyRecords === forkMirrorOnlyRecordCount,
+    globalMirrorOnlyExplainedPercent: forkMirrorOnlyRecordCount
+      ? (explainedMirrorOnlyRecords / forkMirrorOnlyRecordCount) * 100
+      : 100,
     items,
   };
 }

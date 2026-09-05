@@ -31,8 +31,8 @@ export function codexEventTypeInfo(event: UnknownCodexEvent): CodexEventTypeInfo
   const semanticType = isTokenCount
     ? "token_count"
     : outerType === "event_msg"
-      ? payloadType ?? messageType ?? outerType
-      : messageType ?? payloadType ?? outerType;
+      ? messageType ?? payloadType ?? outerType
+      : outerType ?? payloadType ?? messageType;
   return { outerType, payloadType, messageType, semanticType, isTokenCount };
 }
 

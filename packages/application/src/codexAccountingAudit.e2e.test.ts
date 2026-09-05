@@ -45,8 +45,11 @@ describe("Codex accounting audit end to end", () => {
     expect(report.raw.usageSources.payloadUsage.events).toBe(3);
     expect(report.raw.usageSources.flatPayloadUsage.events).toBe(1);
     expect(report.raw.usageSources.ignoredNoModel.events).toBe(1);
-    expect(report.auditRevision).toBe(4);
+    expect(report.auditRevision).toBe(5);
     expect(report.eventTaxonomy.tokenCountEvents).toBeGreaterThan(0);
     expect(report.payloadUsageOverlap.payloadTokenInvariant).toBe(true);
+    expect(report.payloadUsageOverlap.payloadEventInvariant).toBe(true);
+    expect(report.payloadUsageOverlap.payloadClassificationInvariant).toBe(true);
+    expect(report.forkHistory.forkMirrorOnlyInvariant).toBe(true);
   });
 });

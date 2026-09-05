@@ -156,12 +156,11 @@ const hasUsageFieldsV4 = (value: unknown): boolean => {
     "total_tokens",
     "totalTokens",
     "reasoning_output_tokens",
-    "reasoningOutputTokens",
   ].some((key) => key in object);
 };
 
-const eventType = (event: CodexExtractedEvent): string | undefined =>
-  event.semanticType ?? event.eventType ?? stringValue(event.raw.type);
+const eventTypeV4 = (event: CodexExtractedEvent): string | undefined =>
+  stringValue(event.raw.type);
 
 function mirrorEventV4(
   event: CodexExtractedEvent,
@@ -186,7 +185,7 @@ function mirrorEventV4(
     stringAt(msg, "model") ??
     stringAt(event.raw, "model") ??
     context.currentModel;
-  const type = eventType(event);
+  const type = eventTypeV4(event);
   const sessionId =
     (type === "session_meta" ? firstString(payload, "id") : undefined) ??
     firstString(payload, "session_id", "sessionId") ??

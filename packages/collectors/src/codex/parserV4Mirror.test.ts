@@ -155,6 +155,42 @@ describe("Codex Parser v4 mirror", () => {
     expect(replayCodexV4([file("/fixture/cache.jsonl", [onlyCacheCreation])]).recordCount).toBe(0);
   });
 
+  it("does not let taxonomy change the frozen outer event type", () => {
+    const result = replayCodexV4([file("/fixture/outer.jsonl", [{
+      raw: {
+        type: "response_item",
+        payload: {
+          type: "message",
+          model: "gpt-5",
+          info: { last_token_usage: { input_tokens: 25 } },
+        },
+      },
+      eventIndex: 0,
+      eventType: "response_item",
+      semanticType: "response_item",
+      isTokenCount: false,
+      source: "nested-info-non-token-count",
+    }])]);
+
+    expect(result.recordCount).toBe(1);
+    expect([...result.records.values()][0]?.usage.inputTokens).toBe(25);
+  });
+
+  it("does not make reasoningOutputTokens alone eligible in v4", () => {
+    const result = replayCodexV4([file("/fixture/reasoning-alias.jsonl", [{
+      raw: {
+        type: "token_count",
+        payload: { model: "gpt-5", info: { last_token_usage: { reasoningOutputTokens: 25 } } },
+      },
+      eventIndex: 0,
+      eventType: "token_count",
+      isTokenCount: true,
+      source: "token-count",
+    }])]);
+
+    expect(result.recordCount).toBe(0);
+  });
+
   it("preserves an explicit zero cumulative snapshot in parser state", () => {
     const result = replayCodexV4([file("/fixture/zero-total.jsonl", [
       event("zero", 0, { model: "gpt-5" }, 1_000),
