@@ -136,6 +136,15 @@ async function runRawAudit(): Promise<void> {
           <span>{{ t("settings.rawRepeatedSnapshots") }}</span><strong>{{ usage.rawAuditReport.events.repeatedTotalWithNonZeroLast }}</strong>
           <span>{{ t("settings.rawCounterDecreases") }}</span><strong>{{ usage.rawAuditReport.events.totalCounterDecrease }}</strong>
         </div>
+        <div v-if="usage.codexAccountingAuditReport" class="audit-breakdown">
+          <span>{{ t("settings.rawAccounting") }}: {{ usage.codexAccountingAuditReport.accounting }}</span>
+          <span>{{ t("settings.rawParserEquivalent") }}: {{ formatTokens(usage.codexAccountingAuditReport.reconciliation.parserEquivalentV4Tokens) }}</span>
+          <span>{{ t("settings.rawHybrid") }}: {{ formatTokens(usage.codexAccountingAuditReport.raw.methods.hybridCanonical.inputTokens + usage.codexAccountingAuditReport.raw.methods.hybridCanonical.cachedInputTokens + usage.codexAccountingAuditReport.raw.methods.hybridCanonical.cacheCreationInputTokens + usage.codexAccountingAuditReport.raw.methods.hybridCanonical.outputTokens + usage.codexAccountingAuditReport.raw.methods.hybridCanonical.reasoningOutputTokens) }}</span>
+          <span>{{ t("settings.rawDatabase") }}: {{ formatTokens(usage.codexAccountingAuditReport.reconciliation.databaseTokens) }}</span>
+          <span>{{ t("settings.rawDifference") }}: {{ formatTokens(usage.codexAccountingAuditReport.reconciliation.differenceTokens) }}</span>
+          <span>{{ t("settings.rawSnapshot") }}: {{ usage.codexAccountingAuditReport.snapshotStable ? "✓" : "!" }}</span>
+          <span>{{ t("settings.rawSources") }}: {{ usage.codexAccountingAuditReport.raw.usageSources.tokenCount.events }} / {{ usage.codexAccountingAuditReport.raw.usageSources.nestedInfoNonTokenCount.events }} / {{ usage.codexAccountingAuditReport.raw.usageSources.payloadUsage.events }} / {{ usage.codexAccountingAuditReport.raw.usageSources.flatPayloadUsage.events }}</span>
+        </div>
       </div>
       <div class="setting-row">
         <div>

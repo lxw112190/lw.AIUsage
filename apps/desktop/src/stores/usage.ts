@@ -14,11 +14,12 @@ import {
   DiagnosticsService,
   SyncManager,
   UsageAuditService,
-  CodexRawAuditService,
+  CodexAccountingAuditService,
   type RebuildAuditResult,
   type SyncResult,
   type UsageAuditReport,
   type CodexRawAuditReport,
+  type CodexAccountingAuditReport,
 } from "@lw-aiusage/application";
 import { JsonlWorkerParser } from "../workers/jsonlParser";
 
@@ -40,6 +41,7 @@ export const useUsageStore = defineStore("runtime", () => {
   const rebuildAudit = ref<RebuildAuditResult>();
   const auditReport = ref<UsageAuditReport>();
   const rawAuditReport = ref<CodexRawAuditReport>();
+  const codexAccountingAuditReport = ref<CodexAccountingAuditReport>();
   const rawAuditProgress = ref<{ current: number; total: number }>();
   const rawAuditBusy = ref(false);
   let watchHandle: WatchHandle | undefined;
@@ -155,18 +157,30 @@ export const useUsageStore = defineStore("runtime", () => {
     if (rawAuditBusy.value) return;
     rawAuditBusy.value = true;
     rawAuditProgress.value = { current: 0, total: 0 };
+    const wasWatching = !!watchHandle;
+    const revisionBefore = dataRevision.value;
     try {
-      rawAuditReport.value = await new CodexRawAuditService(platform).audit((current, total) => {
+      if (watchHandle) {
+        await watchHandle.close();
+        watchHandle = undefined;
+      }
+      const report = await new CodexAccountingAuditService(platform, repository).audit((current, total) => {
         rawAuditProgress.value = { current, total };
-      });
-      const blob = new Blob([JSON.stringify(rawAuditReport.value, null, 2)], { type: "application/json" });
+      }, revisionBefore === dataRevision.value);
+      codexAccountingAuditReport.value = report;
+      rawAuditReport.value = report.raw;
+      const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "lw-aiusage-codex-raw-audit.json";
+      link.download = "lw-aiusage-codex-accounting-audit-v3.json";
       link.click();
       URL.revokeObjectURL(url);
     } finally {
+      if (wasWatching && !watchHandle) {
+        try { await startWatch(); }
+        catch (cause) { diagnostics.add("ERROR", cause instanceof Error ? cause.message : "Unable to restart watcher", "watch"); }
+      }
       rawAuditBusy.value = false;
     }
   }
@@ -183,6 +197,7 @@ export const useUsageStore = defineStore("runtime", () => {
     rebuildAudit,
     auditReport,
     rawAuditReport,
+    codexAccountingAuditReport,
     rawAuditProgress,
     rawAuditBusy,
     refreshCollectorStatuses,

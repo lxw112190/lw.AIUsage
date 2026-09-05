@@ -27,6 +27,19 @@ describe("repository pagination", () => {
     const result = await repository.getRecordsPage({ page: 1, pageSize: 20, source: "codex", model: "gpt-5", projectKey: "p", from: 100, to: 200 });
     expect(result.items.map((record) => record.id)).toEqual(["a"]);
   });
+  it("summarizes one source without mixing other agents", async () => {
+    const repository = new MemoryUsageRepository();
+    const usage = { inputTokens: 2, cachedInputTokens: 1, cacheCreationInputTokens: 0, outputTokens: 3, reasoningOutputTokens: 0 };
+    await repository.putRecords([
+      { id: "a", source: "codex", sessionId: "s1", timestamp: 1, model: "gpt-5", projectKey: "p", usage },
+      { id: "b", source: "codex", sessionId: "s1", timestamp: 2, model: "gpt-5", projectKey: "p", usage },
+      { id: "c", source: "claude", sessionId: "s2", timestamp: 3, model: "claude", projectKey: "p", usage },
+    ]);
+    const summary = await repository.getSourceUsageSummary("codex");
+    expect(summary.recordCount).toBe(2);
+    expect(summary.sessionCount).toBe(1);
+    expect(summary.totalTokens).toBe(12);
+  });
 });
 
 describe("repository scan commit", () => {

@@ -3,6 +3,7 @@ export * from "./registry";
 export * from "./codex/collector";
 export * from "./codex/parser";
 export * from "./codex/rawAudit";
+export * from "./codex/accounting";
 export * from "./claude/collector";
 export * from "./claude/parser";
 export * from "./shared/jsonl";

@@ -47,6 +47,13 @@ export interface UsagePageResult {
   total: number;
   totalPages: number;
 }
+export interface SourceUsageSummary {
+  source: AgentSource;
+  recordCount: number;
+  sessionCount: number;
+  usage: UsageRecord["usage"];
+  totalTokens: number;
+}
 export interface UsageRepository {
   putRecords(records: readonly UsageRecord[]): Promise<number>;
   commitScan(
@@ -60,6 +67,7 @@ export interface UsageRepository {
   getModelOptions(): Promise<string[]>;
   getProjectOptions(): Promise<string[]>;
   getBuckets(query?: UsageQuery): Promise<UsageBucket[]>;
+  getSourceUsageSummary(source: AgentSource): Promise<SourceUsageSummary>;
   putBuckets(buckets: readonly UsageBucket[]): Promise<void>;
   getCursors(): Promise<FileCursor[]>;
   putCursor(cursor: FileCursor): Promise<void>;
@@ -172,6 +180,17 @@ export class MemoryUsageRepository implements UsageRepository {
           (!query.projectKey || bucket.projectKey === query.projectKey),
       )
       .sort((a, b) => a.bucketStart - b.bucketStart);
+  }
+  async getSourceUsageSummary(source: AgentSource): Promise<SourceUsageSummary> {
+    const records = await this.getRecords({ source });
+    const usage = records.reduce((total, record) => ({
+      inputTokens: total.inputTokens + record.usage.inputTokens,
+      cachedInputTokens: total.cachedInputTokens + record.usage.cachedInputTokens,
+      cacheCreationInputTokens: total.cacheCreationInputTokens + record.usage.cacheCreationInputTokens,
+      outputTokens: total.outputTokens + record.usage.outputTokens,
+      reasoningOutputTokens: total.reasoningOutputTokens + record.usage.reasoningOutputTokens,
+    }), { inputTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 });
+    return { source, recordCount: records.length, sessionCount: new Set(records.filter((record) => record.sessionId).map((record) => record.sessionId)).size, usage, totalTokens: Object.values(usage).reduce((sum, value) => sum + value, 0) };
   }
   async putBuckets(buckets: readonly UsageBucket[]): Promise<void> {
     this.buckets.clear();

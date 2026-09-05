@@ -61,7 +61,8 @@ export class FixtureFileSystem implements FileSystemPort {
     end?: number,
   ): Promise<ArrayBuffer> {
     const value = this.files[path] ?? "";
-    return new TextEncoder().encode(value.slice(start, end)).buffer;
+    const bytes = new TextEncoder().encode(value);
+    return bytes.slice(start, end).buffer;
   }
 }
 

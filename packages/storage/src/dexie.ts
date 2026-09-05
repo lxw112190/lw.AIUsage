@@ -1,5 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import type {
+  AgentSource,
   ProjectRecord,
   SessionRecord,
   UsageBucket,
@@ -12,6 +13,7 @@ import type {
   UsagePageResult,
   UsageQuery,
   UsageRepository,
+  SourceUsageSummary,
 } from "./repository";
 
 class AiUsageDatabase extends Dexie {
@@ -186,6 +188,17 @@ export class DexieUsageRepository implements UsageRepository {
     return (await collection.toArray())
       .filter((item) => matches(query, item))
       .sort((a, b) => a.bucketStart - b.bucketStart);
+  }
+  async getSourceUsageSummary(source: AgentSource): Promise<SourceUsageSummary> {
+    const records = await this.db.records.where("source").equals(source).toArray();
+    const usage = records.reduce((total, record) => ({
+      inputTokens: total.inputTokens + record.usage.inputTokens,
+      cachedInputTokens: total.cachedInputTokens + record.usage.cachedInputTokens,
+      cacheCreationInputTokens: total.cacheCreationInputTokens + record.usage.cacheCreationInputTokens,
+      outputTokens: total.outputTokens + record.usage.outputTokens,
+      reasoningOutputTokens: total.reasoningOutputTokens + record.usage.reasoningOutputTokens,
+    }), { inputTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 });
+    return { source, recordCount: records.length, sessionCount: new Set(records.filter((record) => record.sessionId).map((record) => record.sessionId)).size, usage, totalTokens: Object.values(usage).reduce((sum, value) => sum + value, 0) };
   }
   async putBuckets(buckets: readonly UsageBucket[]): Promise<void> {
     await this.db.transaction("rw", this.db.buckets, async () => {

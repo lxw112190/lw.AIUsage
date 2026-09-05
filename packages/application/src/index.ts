@@ -6,5 +6,6 @@ export * from "./sessionReconcile";
 export * from "./watchManager";
 export * from "./usageAudit";
 export * from "./codexRawAudit";
+export * from "./codexAccountingAudit";
 export * from "./activity";
 export * from "./dailyUsage";
