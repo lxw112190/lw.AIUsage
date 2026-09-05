@@ -1,0 +1,19 @@
+{
+  "name": "@lw-aiusage/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "vite", "build": "vite build" },
+  "dependencies": {
+    "@lw-aiusage/application": "workspace:*",
+    "@lw-aiusage/collectors": "workspace:*",
+    "@lw-aiusage/core": "workspace:*",
+    "@lw-aiusage/platform": "workspace:*",
+    "@lw-aiusage/storage": "workspace:*",
+    "echarts": "^5.5.1",
+    "pinia": "^2.3.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.4.5"
+  },
+  "devDependencies": { "@vitejs/plugin-vue": "^5.2.1", "@vue/compiler-sfc": "^3.5.13", "vite": "^6.0.5", "typescript": "^5.7.2" }
+}

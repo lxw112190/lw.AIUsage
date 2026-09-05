@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify source
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  package-windows:
+    name: Package Windows EXE
+    needs: verify
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      WEB2APP_VERSION: v0.2.6
+      WEB2APP_SHA256: 669b4fab5b327bbca83e9351474e2b8531220d05cba81d5fe3033573f3ec3bc4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Download verified lw.Web2App packer
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'lw.Web2App-windows-x64.zip'
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'lw.Web2App'
+          $downloadUrl = "https://github.com/lxw112190/lw.Web2App/releases/download/$env:WEB2APP_VERSION/lw.Web2App-windows-x64.zip"
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $archive
+          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:WEB2APP_SHA256) {
+            throw "lw.Web2App checksum mismatch: $actualHash"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
+          if (-not (Test-Path -LiteralPath (Join-Path $extractRoot 'lw.Web2App.exe'))) {
+            throw 'lw.Web2App.exe was not found in the verified release archive.'
+          }
+          "WEB2APP_ROOT=$extractRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Package and verify EXE
+        shell: pwsh
+        run: |
+          ./tools/package-web2app.ps1 -Web2AppRoot $env:WEB2APP_ROOT
+          $hash = (Get-FileHash -LiteralPath 'artifacts/lw.AIUsage.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash *lw.AIUsage.exe" | Set-Content -LiteralPath 'artifacts/SHA256SUMS.txt' -Encoding ascii
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: lw.AIUsage-windows-x64
+          path: |
+            artifacts/lw.AIUsage.exe
+            artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package-windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows package
+        uses: actions/download-artifact@v4
+        with:
+          name: lw.AIUsage-windows-x64
+          path: release
+
+      - name: Create or update GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:GITHUB_REF_NAME release/lw.AIUsage.exe release/SHA256SUMS.txt --clobber
+          } else {
+            gh release create $env:GITHUB_REF_NAME release/lw.AIUsage.exe release/SHA256SUMS.txt --verify-tag --generate-notes --title "lw.AIUsage $env:GITHUB_REF_NAME"
+          }

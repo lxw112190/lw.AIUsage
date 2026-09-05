@@ -1,0 +1,8 @@
+{
+  "name": "@lw-aiusage/platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@lw-aiusage/core": "workspace:*" },
+  "exports": { ".": "./src/index.ts" }
+}

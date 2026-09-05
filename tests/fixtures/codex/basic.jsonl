@@ -1,0 +1,3 @@
+{"type":"session_meta","timestamp":"2026-09-04T08:00:00.000Z","payload":{"session_id":"fixture-session","cwd":"demo-project"}}
+{"type":"turn_context","timestamp":"2026-09-04T08:01:00.000Z","payload":{"model":"gpt-5-codex"}}
+{"type":"token_count","timestamp":"2026-09-04T08:02:00.000Z","payload":{"usage":{"input_tokens":1200,"cached_input_tokens":300,"output_tokens":450,"reasoning_output_tokens":50}}}

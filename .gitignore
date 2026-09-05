@@ -1,0 +1,37 @@
+# Dependencies and package-manager caches
+node_modules/
+.pnpm-store/
+
+# Generated build and package output
+dist/
+**/dist/
+artifacts/
+coverage/
+*.tsbuildinfo
+
+# Local environment and configuration
+.env
+.env.*
+!.env.example
+*.local
+
+# Temporary files and tool caches
+.tmp/
+.cache/
+.vite/
+tmp/
+temp/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,27 @@
+{
+  "name": "lw-aiusage",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A lightweight, local-first AI coding usage dashboard.",
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "pnpm --filter @lw-aiusage/desktop dev",
+    "build": "pnpm --filter @lw-aiusage/desktop build",
+    "make:icon": "python tools/make-icon.py",
+    "package:web2app": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/package-web2app.ps1",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "@typescript-eslint/parser": "^8.18.0",
+    "eslint": "^9.16.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8"
+  }
+}
