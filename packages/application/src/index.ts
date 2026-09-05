@@ -5,3 +5,4 @@ export * from "./detection";
 export * from "./sessionReconcile";
 export * from "./watchManager";
 export * from "./usageAudit";
+export * from "./codexRawAudit";

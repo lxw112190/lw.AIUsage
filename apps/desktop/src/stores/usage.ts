@@ -14,9 +14,11 @@ import {
   DiagnosticsService,
   SyncManager,
   UsageAuditService,
+  CodexRawAuditService,
   type RebuildAuditResult,
   type SyncResult,
   type UsageAuditReport,
+  type CodexRawAuditReport,
 } from "@lw-aiusage/application";
 import { JsonlWorkerParser } from "../workers/jsonlParser";
 
@@ -37,6 +39,9 @@ export const useUsageStore = defineStore("runtime", () => {
   const dataRevision = ref(0);
   const rebuildAudit = ref<RebuildAuditResult>();
   const auditReport = ref<UsageAuditReport>();
+  const rawAuditReport = ref<CodexRawAuditReport>();
+  const rawAuditProgress = ref<{ current: number; total: number }>();
+  const rawAuditBusy = ref(false);
   let watchHandle: WatchHandle | undefined;
 
   async function refreshCollectorStatuses(): Promise<void> {
@@ -90,6 +95,10 @@ export const useUsageStore = defineStore("runtime", () => {
       error.value = cause instanceof Error ? cause.message : "Rebuild failed";
       diagnostics.add("ERROR", error.value, "rebuild");
     } finally {
+      if (!watchHandle) {
+        try { await startWatch(); }
+        catch (cause) { diagnostics.add("ERROR", cause instanceof Error ? cause.message : "Unable to restart watcher", "watch"); }
+      }
       syncing.value = false;
     }
   }
@@ -142,6 +151,29 @@ export const useUsageStore = defineStore("runtime", () => {
     link.click();
     URL.revokeObjectURL(url);
   }
+  async function runCodexRawAudit(): Promise<void> {
+    if (rawAuditBusy.value) return;
+    rawAuditBusy.value = true;
+    rawAuditProgress.value = { current: 0, total: 0 };
+    try {
+      rawAuditReport.value = await new CodexRawAuditService(platform).audit((current, total) => {
+        rawAuditProgress.value = { current, total };
+      });
+      const blob = new Blob([JSON.stringify(rawAuditReport.value, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "lw-aiusage-codex-raw-audit.json";
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      rawAuditBusy.value = false;
+    }
+  }
+  function recordError(message: string): void {
+    error.value = message;
+    diagnostics.add("ERROR", message, "audit");
+  }
   return {
     collectorStatuses,
     syncing,
@@ -150,11 +182,16 @@ export const useUsageStore = defineStore("runtime", () => {
     dataRevision,
     rebuildAudit,
     auditReport,
+    rawAuditReport,
+    rawAuditProgress,
+    rawAuditBusy,
     refreshCollectorStatuses,
     sync,
     rebuild,
     resetLocalData,
     exportDiagnostics,
     exportUsageAudit,
+    runCodexRawAudit,
+    recordError,
   };
 });

@@ -3,18 +3,14 @@ import { ref } from "vue";
 import { useSettingsStore, type ThemeMode } from "../stores/settings";
 import { useUsageStore } from "../stores/usage";
 import { useI18n } from "../i18n";
+import { formatTokenAmount } from "../format";
 
 const settings = useSettingsStore();
 const usage = useUsageStore();
 const { t } = useI18n();
 const busy = ref(false);
 const auditBusy = ref(false);
-const formatTokens = (value: number): string =>
-  value >= 1_000_000_000
-    ? `${(value / 1_000_000_000).toFixed(2)}B`
-    : value >= 1_000_000
-      ? `${(value / 1_000_000).toFixed(2)}M`
-      : value.toLocaleString();
+const formatTokens = (value: number): string => formatTokenAmount(value);
 function changeLanguage(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   settings.setLanguage(value === "zh" ? "zh" : "en");
@@ -43,6 +39,13 @@ async function generateAudit(): Promise<void> {
     await usage.exportUsageAudit();
   } finally {
     auditBusy.value = false;
+  }
+}
+async function runRawAudit(): Promise<void> {
+  try {
+    await usage.runCodexRawAudit();
+  } catch (cause) {
+    await usage.recordError(cause instanceof Error ? cause.message : "Raw audit failed");
   }
 }
 </script>
@@ -108,6 +111,31 @@ async function generateAudit(): Promise<void> {
         <div class="audit-breakdown"><span v-for="item in usage.auditReport.byModel" :key="item.model">{{ item.model }}: {{ formatTokens(item.totals.currentTotal) }}</span></div>
         <h3 class="audit-subheading">{{ t("settings.auditPeakDays") }}</h3>
         <div class="audit-breakdown"><span v-for="item in usage.auditReport.peakDays.slice(0, 5)" :key="item.day">{{ item.day }}: {{ formatTokens(item.totals.currentTotal) }}</span></div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <h3>{{ t("settings.rawAudit") }}</h3>
+          <p>{{ t("settings.rawAuditDescription") }}</p>
+          <small v-if="usage.rawAuditBusy && usage.rawAuditProgress">{{ t("settings.rawAuditProgress") }} {{ usage.rawAuditProgress.current }} / {{ usage.rawAuditProgress.total }}</small>
+        </div>
+        <button class="setting-action" :disabled="usage.rawAuditBusy" @click="runRawAudit">
+          {{ usage.rawAuditBusy ? t("settings.rawAuditing") : t("settings.rawAuditAction") }}
+        </button>
+      </div>
+      <div v-if="usage.rawAuditReport" class="audit-result">
+        <div class="audit-summary">
+          <span>{{ t("settings.rawFiles") }}</span><strong>{{ usage.rawAuditReport.files }} / {{ usage.rawAuditReport.canonicalFiles }}</strong>
+          <span>{{ t("settings.rawDuplicateFiles") }}</span><strong>{{ usage.rawAuditReport.duplicateFiles }}</strong>
+          <span>{{ t("settings.rawSessions") }}</span><strong>{{ usage.rawAuditReport.sessions }}</strong>
+          <span>{{ t("settings.rawForks") }}</span><strong>{{ usage.rawAuditReport.fork.sessions }}</strong>
+          <span>{{ t("settings.rawBaselineMissing") }}</span><strong>{{ usage.rawAuditReport.fork.baselineMissing }}</strong>
+          <span>{{ t("settings.rawLastSum") }}</span><strong>{{ formatTokens(usage.rawAuditReport.methods.lastUsageSum.inputTokens + usage.rawAuditReport.methods.lastUsageSum.cachedInputTokens + usage.rawAuditReport.methods.lastUsageSum.outputTokens + usage.rawAuditReport.methods.lastUsageSum.reasoningOutputTokens) }}</strong>
+          <span>{{ t("settings.rawTotalDelta") }}</span><strong>{{ formatTokens(usage.rawAuditReport.methods.totalDeltaSum.inputTokens + usage.rawAuditReport.methods.totalDeltaSum.cachedInputTokens + usage.rawAuditReport.methods.totalDeltaSum.outputTokens + usage.rawAuditReport.methods.totalDeltaSum.reasoningOutputTokens) }}</strong>
+          <span>{{ t("settings.rawCurrentEquivalent") }}</span><strong>{{ formatTokens(usage.rawAuditReport.methods.currentEquivalent.inputTokens + usage.rawAuditReport.methods.currentEquivalent.cachedInputTokens + usage.rawAuditReport.methods.currentEquivalent.outputTokens + usage.rawAuditReport.methods.currentEquivalent.reasoningOutputTokens) }}</strong>
+          <span>{{ t("settings.rawMismatchTokens") }}</span><strong>{{ formatTokens(usage.rawAuditReport.discrepancy.positiveMismatchTokens) }}</strong>
+          <span>{{ t("settings.rawRepeatedSnapshots") }}</span><strong>{{ usage.rawAuditReport.events.repeatedTotalWithNonZeroLast }}</strong>
+          <span>{{ t("settings.rawCounterDecreases") }}</span><strong>{{ usage.rawAuditReport.events.totalCounterDecrease }}</strong>
+        </div>
       </div>
       <div class="setting-row">
         <div>

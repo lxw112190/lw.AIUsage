@@ -3,10 +3,11 @@ import { computed } from "vue";
 import { useUsageRecordsStore } from "../stores/usageRecords";
 import { projectDisplayName, totalTokens } from "@lw-aiusage/core";
 import { useI18n } from "../i18n";
+import { formatTokenAmount } from "../format";
 
 const store = useUsageRecordsStore();
 const { t, locale } = useI18n();
-const format = (value: number): string => value.toLocaleString(locale.value === "zh" ? "zh-CN" : "en-US");
+const format = (value: number): string => formatTokenAmount(value);
 const dateTime = (value: number): string => new Date(value).toLocaleString(locale.value === "zh" ? "zh-CN" : "en-US");
 const pages = computed(() => {
   const values: Array<number | "…"> = [];
@@ -32,7 +33,7 @@ const pages = computed(() => {
     </article>
     <article class="panel table-panel" :class="{ 'is-loading': store.loading }">
       <table>
-        <thead><tr><th>{{ t("usage.time") }}</th><th>{{ t("filter.agent") }}</th><th>{{ t("filter.model") }}</th><th>{{ t("filter.project") }}</th><th>{{ t("usage.input") }}</th><th>{{ t("usage.cached") }}</th><th>{{ t("usage.output") }}</th><th>{{ t("usage.total") }}</th></tr></thead>
+        <thead><tr><th>{{ t("usage.time") }}</th><th>{{ t("filter.agent") }}</th><th>{{ t("filter.model") }}</th><th>{{ t("filter.project") }}</th><th>{{ t("usage.input") }} ({{ t("usage.tokenUnit") }})</th><th>{{ t("usage.cached") }} ({{ t("usage.tokenUnit") }})</th><th>{{ t("usage.output") }} ({{ t("usage.tokenUnit") }})</th><th>{{ t("usage.total") }} ({{ t("usage.tokenUnit") }})</th></tr></thead>
         <tbody>
           <tr v-for="record in store.items" :key="record.id"><td>{{ dateTime(record.timestamp) }}</td><td><span class="source-badge">{{ record.source }}</span></td><td>{{ record.model }}</td><td>{{ projectDisplayName(record.projectKey) }}</td><td>{{ format(record.usage.inputTokens) }}</td><td>{{ format(record.usage.cachedInputTokens) }}</td><td>{{ format(record.usage.outputTokens) }}</td><td><strong>{{ format(totalTokens(record.usage)) }}</strong></td></tr>
           <tr v-if="!store.items.length"><td colspan="8" class="empty-cell">{{ t("usage.empty") }}</td></tr>

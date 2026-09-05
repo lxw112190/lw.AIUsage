@@ -37,7 +37,12 @@ export interface DashboardData {
   estimatedCostUsd: number;
   bySource: Record<string, number>;
   bySourceRecords: Record<string, number>;
-  trend: Array<{ bucketStart: number; totalTokens: number }>;
+  trend: DashboardTrendPoint[];
+}
+export interface DashboardTrendPoint {
+  day: string;
+  timestamp: number;
+  totalTokens: number;
 }
 export interface StatsData {
   byModel: UsageGroup[];
@@ -118,7 +123,7 @@ export class QueryService {
     const buckets = await this.repository.getBuckets();
     const bySource: Record<string, number> = {};
     const bySourceRecords: Record<string, number> = {};
-    const trend = new Map<number, number>();
+    const trend = new Map<string, { timestamp: number; totalTokens: number }>();
     let records = 0;
     let tokens = 0;
     let cost = 0;
@@ -128,7 +133,14 @@ export class QueryService {
       tokens += bucketTokens;
       bySource[bucket.source] = (bySource[bucket.source] ?? 0) + bucketTokens;
       bySourceRecords[bucket.source] = (bySourceRecords[bucket.source] ?? 0) + bucket.recordCount;
-      trend.set(bucket.bucketStart, (trend.get(bucket.bucketStart) ?? 0) + bucketTokens);
+      const date = new Date(bucket.bucketStart);
+      const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      const current = trend.get(day);
+      if (current) current.totalTokens += bucketTokens;
+      else {
+        const start = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+        trend.set(day, { timestamp: start, totalTokens: bucketTokens });
+      }
       const pricing = pricingForModel(bucket.model);
       if (pricing) cost += estimatedCostUsd(bucket.usage, pricing);
     }
@@ -139,8 +151,8 @@ export class QueryService {
       bySource,
       bySourceRecords,
       trend: [...trend.entries()]
-        .sort(([left], [right]) => left - right)
-        .map(([bucketStart, totalTokens]) => ({ bucketStart, totalTokens })),
+        .sort(([, left], [, right]) => left.timestamp - right.timestamp)
+        .map(([day, point]) => ({ day, ...point })),
     };
   }
   async stats(): Promise<StatsData> {

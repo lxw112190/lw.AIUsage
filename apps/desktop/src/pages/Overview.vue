@@ -7,6 +7,7 @@ import { CanvasRenderer } from "echarts/renderers";
 import { useOverviewStore } from "../stores/overview";
 import { useUsageStore } from "../stores/usage";
 import { useI18n } from "../i18n";
+import { formatTokenAmount } from "../format";
 
 use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 const store = useOverviewStore();
@@ -14,9 +15,9 @@ const runtime = useUsageStore();
 const { t, locale } = useI18n();
 const chartElement = ref<HTMLElement>();
 let chart: ECharts | undefined;
-const format = (value: number): string => value >= 1_000_000 ? `${(value / 1_000_000).toFixed(2)}M` : value >= 1_000 ? `${(value / 1_000).toFixed(1)}K` : String(value);
+const format = (value: number): string => formatTokenAmount(value);
 const trend = computed(() => store.data.trend.map((item) => [
-  new Date(item.bucketStart).toLocaleDateString(locale.value === "zh" ? "zh-CN" : "en-US", { month: "short", day: "numeric" }),
+  new Date(item.timestamp).toLocaleDateString(locale.value === "zh" ? "zh-CN" : "en-US", { month: "short", day: "numeric" }),
   item.totalTokens,
 ] as [string, number]));
 function renderChart(): void {
@@ -24,9 +25,9 @@ function renderChart(): void {
   chart ??= init(chartElement.value);
   chart.setOption({
     grid: { left: 8, right: 12, top: 18, bottom: 22, containLabel: true },
-    tooltip: { trigger: "axis" },
+    tooltip: { trigger: "axis", valueFormatter: (value: number | string) => formatTokenAmount(Number(value)) },
     xAxis: { type: "category", data: trend.value.map(([key]) => key), axisLine: { lineStyle: { color: "#dfe3ea" } } },
-    yAxis: { type: "value", splitLine: { lineStyle: { color: "#eef0f4" } } },
+    yAxis: { type: "value", axisLabel: { formatter: (value: number) => formatTokenAmount(value) }, splitLine: { lineStyle: { color: "#eef0f4" } } },
     series: [{ type: "line", smooth: true, data: trend.value.map(([, value]) => value), symbol: "circle", symbolSize: 7, lineStyle: { width: 3, color: "#6957e8" }, itemStyle: { color: "#6957e8" }, areaStyle: { color: "rgba(105,87,232,.16)" } }],
   });
 }

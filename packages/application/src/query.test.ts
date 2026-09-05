@@ -3,6 +3,25 @@ import { MemoryUsageRepository } from "@lw-aiusage/storage";
 import { QueryService } from "./query";
 
 describe("QueryService", () => {
+  it("aggregates 30-minute buckets into one local day trend point", async () => {
+    const repository = new MemoryUsageRepository();
+    const day = new Date("2026-09-01T00:00:00");
+    await repository.putBuckets(Array.from({ length: 48 }, (_, index) => ({
+      id: `bucket-${index}`,
+      bucketStart: day.getTime() + index * 30 * 60 * 1000,
+      source: "codex" as const,
+      model: "gpt-5",
+      projectKey: "demo",
+      usage: { inputTokens: 1, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 },
+      recordCount: 1,
+      sessionCount: 1,
+    })));
+    const dashboard = await new QueryService(repository).dashboard();
+    expect(dashboard.trend).toHaveLength(1);
+    expect(dashboard.trend[0]?.day).toBe("2026-09-01");
+    expect(dashboard.trend[0]?.totalTokens).toBe(48);
+  });
+
   it("filters records and groups the result by model and project", async () => {
     const repository = new MemoryUsageRepository();
     await repository.putRecords([

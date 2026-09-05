@@ -2,10 +2,11 @@
 import { useStatsStore } from "../stores/stats";
 import { projectDisplayName } from "@lw-aiusage/core";
 import { useI18n } from "../i18n";
+import { formatTokenAmount } from "../format";
 
 const store = useStatsStore();
 const { t, locale } = useI18n();
-const format = (value: number): string => value.toLocaleString(locale.value === "zh" ? "zh-CN" : "en-US");
+const format = (value: number): string => formatTokenAmount(value);
 const money = (value: number): string => `$${value.toFixed(2)}`;
 </script>
 
