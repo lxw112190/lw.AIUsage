@@ -152,6 +152,83 @@ describe("Codex Parser v4 mirror", () => {
     expect(replayCodexV4([file("/fixture/cache.jsonl", [onlyCacheCreation])]).recordCount).toBe(0);
   });
 
+  it("preserves an explicit zero cumulative snapshot in parser state", () => {
+    const result = replayCodexV4([file("/fixture/zero-total.jsonl", [
+      event("zero", 0, { model: "gpt-5" }, 1_000),
+      event("zero", 1, { model: "gpt-5" }, 0),
+      event("zero", 2, { model: "gpt-5" }, 100),
+    ])]);
+
+    expect(result.recordCount).toBe(2);
+    expect(result.usage.inputTokens).toBe(1_100);
+  });
+
+  it("keeps zero last usage on the v4 last branch", () => {
+    const result = replayCodexV4([file("/fixture/zero-last.jsonl", [
+      event("zero-last", 0, { model: "gpt-5" }, 1_000),
+      event("zero-last", 1, { model: "gpt-5" }, 1_500, 0),
+      event("zero-last", 2, { model: "gpt-5" }, 1_600),
+    ])]);
+
+    expect(result.recordCount).toBe(2);
+    expect([...result.records.values()].map((record) => record.usage.inputTokens)).toEqual([1_000, 100]);
+  });
+
+  it("updates total state while using a nonzero last after a zero total", () => {
+    const result = replayCodexV4([file("/fixture/zero-with-last.jsonl", [
+      event("zero-with-last", 0, { model: "gpt-5" }, 1_000),
+      event("zero-with-last", 1, { model: "gpt-5" }, 0, 50),
+      event("zero-with-last", 2, { model: "gpt-5" }, 100),
+    ])]);
+
+    expect(result.recordCount).toBe(3);
+    expect([...result.records.values()].map((record) => record.usage.inputTokens)).toEqual([1_000, 50, 100]);
+  });
+
+  it("matches v4 cache creation field precedence", () => {
+    const raw = {
+      type: "token_count",
+      payload: {
+        model: "gpt-5",
+        info: {
+          last_token_usage: {
+            input_tokens: 300,
+            cached_input_tokens: 80,
+            cache_write_input_tokens: 120,
+            cache_creation_input_tokens: 80,
+            reasoning_output_tokens: 4,
+          },
+        },
+      },
+    };
+    const result = replayCodexV4([file("/fixture/cache-priority.jsonl", [{
+      raw,
+      eventIndex: 0,
+      eventType: "token_count",
+      source: "token-count",
+    }])]);
+
+    expect([...result.records.values()][0]!.usage).toEqual({
+      inputTokens: 220,
+      cachedInputTokens: 80,
+      cacheCreationInputTokens: 120,
+      outputTokens: 0,
+      reasoningOutputTokens: 4,
+    });
+  });
+
+  it("keeps the total_tokens-only compatibility fallback", () => {
+    const result = replayCodexV4([file("/fixture/total-only.jsonl", [{
+      raw: { type: "token_count", payload: { model: "gpt-5", info: { total_token_usage: { total_tokens: 500 } } } },
+      eventIndex: 0,
+      eventType: "token_count",
+      source: "token-count",
+    }])]);
+
+    expect(result.usage.inputTokens).toBe(500);
+    expect(result.recordCount).toBe(1);
+  });
+
   it("resolves fork baseline in file scan order and aggregates every dimension", () => {
     const result = replayCodexV4([
       file("/fixture/.codex/sessions/a-parent.jsonl", [

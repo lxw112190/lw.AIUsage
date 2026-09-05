@@ -1,6 +1,11 @@
+/**
+ * Frozen compatibility mirror for Codex parser v4.
+ *
+ * Keep this implementation stable when parser v5 changes. It is an
+ * independent historical accounting oracle for validating stored records.
+ */
 import { totalTokens, zeroUsage, type TokenUsage } from "@lw-aiusage/core";
 import { objectValue, stableEventId, stringValue } from "../shared/identity";
-import { normalizeRawCounters, type CodexRawCounters } from "./accounting";
 import type {
   CodexExtractedEvent,
   CodexExtractedFile,
@@ -36,6 +41,15 @@ export interface ParserV4MirrorResult {
 interface MirrorEventResult {
   state: ParserV4MirrorState;
   record?: ParserV4MirrorRecord;
+}
+
+interface V4RawUsage {
+  input: number;
+  cachedInput: number;
+  cacheCreationInput: number;
+  output: number;
+  reasoningOutput: number;
+  total: number;
 }
 
 const cloneUsage = (usage: TokenUsage): TokenUsage => ({ ...usage });
@@ -79,6 +93,50 @@ const firstString = (value: unknown, ...keys: string[]): string | undefined => {
   return undefined;
 };
 
+const firstNumberV4 = (value: unknown, ...keys: string[]): number => {
+  const object = objectValue(value);
+  if (!object) return 0;
+  for (const key of keys) {
+    const candidate = object[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate))
+      return candidate;
+  }
+  return 0;
+};
+
+const rawUsageOfV4 = (value: unknown): V4RawUsage => ({
+  input: firstNumberV4(value, "input_tokens", "inputTokens"),
+  cachedInput: firstNumberV4(value, "cached_input_tokens", "cachedInputTokens"),
+  cacheCreationInput: firstNumberV4(
+    value,
+    "cache_write_input_tokens",
+    "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
+  ),
+  output: firstNumberV4(value, "output_tokens", "outputTokens"),
+  reasoningOutput: firstNumberV4(value, "reasoning_output_tokens"),
+  total: firstNumberV4(value, "total_tokens", "totalTokens"),
+});
+
+const normalizeUsageV4 = (raw: V4RawUsage): TokenUsage => {
+  const usage = zeroUsage();
+  usage.cachedInputTokens = raw.cachedInput;
+  usage.cacheCreationInputTokens = raw.cacheCreationInput;
+  usage.inputTokens = Math.max(raw.input - raw.cachedInput, 0);
+  usage.reasoningOutputTokens = raw.reasoningOutput;
+  usage.outputTokens = Math.max(raw.output - raw.reasoningOutput, 0);
+  if (
+    raw.total > 0 &&
+    raw.input === 0 &&
+    raw.output === 0 &&
+    raw.reasoningOutput === 0 &&
+    raw.cachedInput === 0
+  ) {
+    usage.inputTokens = raw.total;
+  }
+  return usage;
+};
+
 const hasUsageFieldsV4 = (value: unknown): boolean => {
   const object = objectValue(value);
   return !!object && [
@@ -92,9 +150,6 @@ const hasUsageFieldsV4 = (value: unknown): boolean => {
     "reasoning_output_tokens",
   ].some((key) => key in object);
 };
-
-const usageFrom = (value: CodexRawCounters | undefined): TokenUsage | undefined =>
-  value ? normalizeRawCounters(value) : undefined;
 
 const eventType = (event: CodexExtractedEvent): string | undefined =>
   stringValue(event.raw.type);
@@ -153,22 +208,28 @@ function mirrorEventV4(
   if (!rawUsageNode || !model || !hasUsageFieldsV4(rawUsageNode))
     return { state };
 
-  const normalizedTotal = event.total && hasUsageFieldsV4(totalNode)
-    ? usageFrom(event.total)
+  const normalizedTotal = totalNode && hasUsageFieldsV4(totalNode)
+    ? normalizeUsageV4(rawUsageOfV4(totalNode))
+    : undefined;
+  const normalizedLast = lastNode && hasUsageFieldsV4(lastNode)
+    ? normalizeUsageV4(rawUsageOfV4(lastNode))
+    : undefined;
+  const normalizedFlat = flatUsageNode && hasUsageFieldsV4(flatUsageNode)
+    ? normalizeUsageV4(rawUsageOfV4(flatUsageNode))
     : undefined;
   if (normalizedTotal) state.previousTotalUsage = normalizedTotal;
   const previousTotal = context.previousTotalUsage ?? state.forkBaselineUsage;
-  const usage = lastNode && event.last
-    ? totalNode && event.total && state.forkBaselineUsage && !context.previousTotalUsage
+  const usage = lastNode
+    ? totalNode && normalizedTotal && state.forkBaselineUsage && !context.previousTotalUsage
       ? subtractUsage(
-          usageFrom(event.total) ?? zeroUsage(),
+          normalizedTotal ?? zeroUsage(),
           state.forkBaselineUsage,
         )
-      : usageFrom(event.last) ?? zeroUsage()
-    : totalNode && event.total
-      ? subtractUsage(usageFrom(event.total) ?? zeroUsage(), previousTotal)
-      : usageFrom(event.flat) ?? zeroUsage();
-  if (totalNode && event.total && state.forkBaselineUsage && !context.previousTotalUsage)
+      : normalizedLast ?? zeroUsage()
+    : totalNode && normalizedTotal
+      ? subtractUsage(normalizedTotal, previousTotal)
+      : normalizedFlat ?? zeroUsage();
+  if (totalNode && normalizedTotal && state.forkBaselineUsage && !context.previousTotalUsage)
     state.forkBaselineApplied = true;
   if (!hasTokens(usage)) return { state };
 
