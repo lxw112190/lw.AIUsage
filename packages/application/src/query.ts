@@ -13,6 +13,7 @@ import type {
   UsageRepository,
 } from "@lw-aiusage/storage";
 import { ActivityService, type ActivityGranularity, type ActivityViewData } from "./activity";
+import { dailyUsageFromBuckets } from "./dailyUsage";
 
 export interface UsageFilters extends UsageQuery {
   source?: AgentSource;
@@ -124,7 +125,6 @@ export class QueryService {
     const buckets = await this.repository.getBuckets();
     const bySource: Record<string, number> = {};
     const bySourceRecords: Record<string, number> = {};
-    const trend = new Map<string, { timestamp: number; totalTokens: number }>();
     let records = 0;
     let tokens = 0;
     let cost = 0;
@@ -134,14 +134,6 @@ export class QueryService {
       tokens += bucketTokens;
       bySource[bucket.source] = (bySource[bucket.source] ?? 0) + bucketTokens;
       bySourceRecords[bucket.source] = (bySourceRecords[bucket.source] ?? 0) + bucket.recordCount;
-      const date = new Date(bucket.bucketStart);
-      const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-      const current = trend.get(day);
-      if (current) current.totalTokens += bucketTokens;
-      else {
-        const start = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-        trend.set(day, { timestamp: start, totalTokens: bucketTokens });
-      }
       const pricing = pricingForModel(bucket.model);
       if (pricing) cost += estimatedCostUsd(bucket.usage, pricing);
     }
@@ -151,9 +143,7 @@ export class QueryService {
       estimatedCostUsd: cost,
       bySource,
       bySourceRecords,
-      trend: [...trend.entries()]
-        .sort(([, left], [, right]) => left.timestamp - right.timestamp)
-        .map(([day, point]) => ({ day, ...point })),
+      trend: dailyUsageFromBuckets(buckets).map(({ day, timestamp, totalTokens }) => ({ day, timestamp, totalTokens })),
     };
   }
   async stats(): Promise<StatsData> {

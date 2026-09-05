@@ -7,3 +7,4 @@ export * from "./watchManager";
 export * from "./usageAudit";
 export * from "./codexRawAudit";
 export * from "./activity";
+export * from "./dailyUsage";

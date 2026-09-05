@@ -20,6 +20,8 @@ describe("QueryService", () => {
     expect(dashboard.trend).toHaveLength(1);
     expect(dashboard.trend[0]?.day).toBe("2026-09-01");
     expect(dashboard.trend[0]?.totalTokens).toBe(48);
+    const cumulative = await new QueryService(repository).activity("cumulative");
+    expect(cumulative.cells.at(-1)?.cumulativeTokens).toBe(dashboard.totalTokens);
   });
 
   it("filters records and groups the result by model and project", async () => {

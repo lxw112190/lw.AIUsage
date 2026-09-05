@@ -1,14 +1,9 @@
-import { totalTokens, type UsageBucket } from "@lw-aiusage/core";
+import { addLocalDays, localDayKey, startOfLocalDay, startOfLocalWeek } from "@lw-aiusage/core";
 import type { UsageRepository } from "@lw-aiusage/storage";
+import { dailyUsageFromBuckets, type DailyUsagePoint } from "./dailyUsage";
 
 export type ActivityGranularity = "daily" | "weekly" | "monthly" | "cumulative";
-export interface DailyPoint {
-  day: string;
-  timestamp: number;
-  totalTokens: number;
-  recordCount: number;
-  sessionCount: number;
-}
+export type DailyPoint = DailyUsagePoint;
 export interface ActivityCell {
   key: string;
   start: number;
@@ -16,14 +11,16 @@ export interface ActivityCell {
   label: string;
   totalTokens: number;
   recordCount: number;
+  /** Sum of bucket session counts; not guaranteed to be unique across the interval. */
   sessionCount: number;
   activeDays?: number;
   cumulativeTokens?: number;
   intensity: 0 | 1 | 2 | 3 | 4;
 }
 export interface ActivitySummary {
-  totalTokens: number;
-  peakTokens: number;
+  allTimeTokens: number;
+  rangeTokens: number;
+  peakIntervalTokens: number;
   peakLabel: string;
   currentStreakDays: number;
   longestStreakDays: number;
@@ -44,20 +41,9 @@ export interface ActivityViewData {
   summary: ActivitySummary;
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const dayStart = (timestamp: number): number => {
-  const date = new Date(timestamp);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-};
-const dayKey = (timestamp: number): string => {
-  const date = new Date(timestamp);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-};
-const weekStart = (timestamp: number): number => {
-  const start = dayStart(timestamp);
-  const day = new Date(start).getDay();
-  return start - (day === 0 ? 6 : day - 1) * DAY_MS;
-};
+const dayStart = startOfLocalDay;
+const dayKey = localDayKey;
+const weekStart = startOfLocalWeek;
 const monthStart = (timestamp: number): number => {
   const date = new Date(timestamp);
   return new Date(date.getFullYear(), date.getMonth(), 1).getTime();
@@ -66,7 +52,7 @@ const nextMonth = (timestamp: number): number => {
   const date = new Date(timestamp);
   return new Date(date.getFullYear(), date.getMonth() + 1, 1).getTime();
 };
-const addDays = (timestamp: number, days: number): number => timestamp + days * DAY_MS;
+const addDays = addLocalDays;
 const emptyPoint = (timestamp: number): DailyPoint => ({ day: dayKey(timestamp), timestamp, totalTokens: 0, recordCount: 0, sessionCount: 0 });
 const addPoint = (target: DailyPoint, source: DailyPoint): void => {
   target.totalTokens += source.totalTokens;
@@ -81,17 +67,18 @@ const intensityFor = (values: readonly number[], value: number, cumulative = fal
   return Math.min(4, Math.floor(((rank < 0 ? sorted.length - 1 : rank) / Math.max(sorted.length - 1, 1)) * 4) + 1) as 1 | 2 | 3 | 4;
 };
 const summaryFor = (daily: readonly DailyPoint[], cells: readonly ActivityCell[], now: number): ActivitySummary => {
-  const total = daily.reduce((sum, point) => sum + point.totalTokens, 0);
+  const allTime = daily.reduce((sum, point) => sum + point.totalTokens, 0);
+  const range = cells.reduce((sum, cell) => sum + cell.totalTokens, 0);
   let current = 0;
   const today = dayStart(now);
   const byDay = new Map(daily.map((point) => [point.timestamp, point.totalTokens]));
-  for (let timestamp = today; (byDay.get(timestamp) ?? 0) > 0; timestamp -= DAY_MS) current += 1;
+  for (let timestamp = today; (byDay.get(timestamp) ?? 0) > 0; timestamp = addDays(timestamp, -1)) current += 1;
   let longest = 0;
   let streak = 0;
   let previousActiveTimestamp: number | undefined;
   for (const point of daily) {
     if (point.totalTokens > 0) {
-      streak = previousActiveTimestamp !== undefined && point.timestamp === previousActiveTimestamp + DAY_MS ? streak + 1 : 1;
+      streak = previousActiveTimestamp !== undefined && point.timestamp === addDays(previousActiveTimestamp, 1) ? streak + 1 : 1;
       previousActiveTimestamp = point.timestamp;
       longest = Math.max(longest, streak);
     } else {
@@ -100,21 +87,8 @@ const summaryFor = (daily: readonly DailyPoint[], cells: readonly ActivityCell[]
     }
   }
   const peak = [...cells].sort((left, right) => right.totalTokens - left.totalTokens)[0];
-  return { totalTokens: total, peakTokens: peak?.totalTokens ?? 0, peakLabel: peak?.label ?? "", currentStreakDays: current, longestStreakDays: longest };
+  return { allTimeTokens: allTime, rangeTokens: range, peakIntervalTokens: peak?.totalTokens ?? 0, peakLabel: peak?.label ?? "", currentStreakDays: current, longestStreakDays: longest };
 };
-function dailyFromBuckets(buckets: readonly UsageBucket[]): DailyPoint[] {
-  const points = new Map<string, DailyPoint>();
-  for (const bucket of buckets) {
-    const timestamp = dayStart(bucket.bucketStart);
-    const key = dayKey(timestamp);
-    const point = points.get(key) ?? emptyPoint(timestamp);
-    point.totalTokens += totalTokens(bucket.usage);
-    point.recordCount += bucket.recordCount;
-    point.sessionCount += bucket.sessionCount;
-    points.set(key, point);
-  }
-  return [...points.values()].sort((left, right) => left.timestamp - right.timestamp);
-}
 function fillDays(points: readonly DailyPoint[], start: number, end: number): DailyPoint[] {
   const byDay = new Map(points.map((point) => [point.day, point]));
   const result: DailyPoint[] = [];
@@ -162,9 +136,16 @@ export function buildActivityView(daily: readonly DailyPoint[], granularity: Act
       for (const point of dailyRange) if (point.timestamp >= timestamp && point.timestamp < end) addPoint(result, point);
       points.push(result);
     }
-  } else {
+  } else if (granularity === "daily") {
     columns = 53; rows = 7; rangeEnd = todayWeekEnd; rangeStart = addDays(rangeEnd, -columns * rows);
     points = fillDays(daily, rangeStart, rangeEnd);
+  } else {
+    const firstActive = daily.find((point) => point.totalTokens > 0);
+    rangeStart = firstActive?.timestamp ?? dayStart(now);
+    rangeEnd = addDays(dayStart(now), 1);
+    points = fillDays(daily, rangeStart, rangeEnd);
+    rows = 1;
+    columns = points.length;
   }
   const cumulative = granularity === "cumulative";
   let running = 0;
@@ -185,6 +166,6 @@ export function buildActivityView(daily: readonly DailyPoint[], granularity: Act
 export class ActivityService {
   constructor(private readonly repository: UsageRepository) {}
   async activity(granularity: ActivityGranularity): Promise<ActivityViewData> {
-    return buildActivityView(dailyFromBuckets(await this.repository.getBuckets()), granularity);
+    return buildActivityView(dailyUsageFromBuckets(await this.repository.getBuckets()), granularity);
   }
 }

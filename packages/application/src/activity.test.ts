@@ -28,13 +28,14 @@ describe("token activity", () => {
     ["daily", 371, 7, 53],
     ["weekly", 52, 4, 13],
     ["monthly", 12, 2, 6],
-    ["cumulative", 371, 7, 53],
+    ["cumulative", 5, 1, 5],
   ] as const)("builds the %s activity grid", (granularity, cellCount, rows, columns) => {
     const view = buildActivityView(daily, granularity, now);
     expect(view.cells).toHaveLength(cellCount);
     expect(view.rows).toBe(rows);
     expect(view.columns).toBe(columns);
-    expect(view.summary.totalTokens).toBe(65);
+    expect(view.summary.allTimeTokens).toBe(65);
+    expect(view.summary.rangeTokens).toBe(65);
   });
 
   it("aggregates weekly and monthly cells while retaining active-day counts", () => {
@@ -54,7 +55,7 @@ describe("token activity", () => {
     const view = buildActivityView(daily, "daily", now);
     expect(view.summary.currentStreakDays).toBe(2);
     expect(view.summary.longestStreakDays).toBe(2);
-    expect(view.summary.peakTokens).toBe(30);
+    expect(view.summary.peakIntervalTokens).toBe(30);
   });
 
   it("exposes a running value for cumulative mode", () => {
@@ -63,5 +64,17 @@ describe("token activity", () => {
     expect(view.cells.find((cell) => cell.key === "2026-09-01")?.cumulativeTokens).toBe(30);
     expect(view.cells.find((cell) => cell.key === "2026-09-03")?.cumulativeTokens).toBe(60);
     expect(view.cells.find((cell) => cell.key === "2026-09-04")?.cumulativeTokens).toBe(65);
+    expect(view.cells.at(-1)?.cumulativeTokens).toBe(view.summary.allTimeTokens);
+  });
+
+  it("keeps cumulative history before the daily window", () => {
+    const view = buildActivityView([
+      point(localDay(2024, 1, 1), 100),
+      point(localDay(2025, 1, 1), 200),
+      point(localDay(2026, 9, 4), 300),
+    ], "cumulative", now);
+    expect(view.rangeStart).toBe(localDay(2024, 1, 1));
+    expect(view.cells.at(-1)?.cumulativeTokens).toBe(600);
+    expect(view.summary.allTimeTokens).toBe(600);
   });
 });
