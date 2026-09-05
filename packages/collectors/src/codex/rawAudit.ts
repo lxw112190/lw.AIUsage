@@ -4,9 +4,11 @@ import { objectValue, stableEventId, stableHash, stringValue } from "../shared/i
 import { parseJsonl } from "../shared/jsonl";
 import { counterDecrease, copyRawCounters, normalizeRawCounters, positiveRawDelta, rawCounterTotal, rawCountersFrom, sameRawCounters, type CodexRawCounters } from "./accounting";
 import type { UnknownCodexEvent } from "./types";
+import type { CodexUsageSource } from "./rawAuditTypes";
+import { peekCodexSessionMeta } from "./rawExtractor";
 
 export type CodexTokenEventClass = "normal-delta" | "duplicate-snapshot" | "counter-reset" | "last-delta-match" | "last-delta-mismatch" | "last-only" | "total-only" | "fork-first" | "fork-baseline-unresolved";
-export type CodexUsageSource = "token-count" | "nested-info-non-token-count" | "payload-usage" | "flat-payload";
+export type { CodexUsageSource } from "./rawAuditTypes";
 export interface CodexRawAuditDay { day: string; currentTotal: number; currentEquivalentTotal: number; lastUsageTotal: number; totalDeltaTotal: number; segmentedTotalDeltaTotal: number; forkAwareTotal: number; parserEquivalentV4Total: number; hybridCanonicalTotal: number }
 export interface CodexRawAuditAnomalySummary { repeatedTotalSnapshot: number; repeatedTotalWithNonZeroLast: number; totalCounterDecrease: number; componentCounterDecrease: number; lastVsDeltaMismatch: number; missingTimestamp: number }
 export interface CodexUsageSourceCount { events: number; rawSnapshotTokens: number; parserEquivalentTokens: number; hybridTokens: number }
@@ -58,7 +60,11 @@ async function recursiveJsonl(platform: RuntimePlatform, root: string): Promise<
 export async function snapshotCodexSource(platform: RuntimePlatform): Promise<CodexSourceSnapshot> {
   const home = await platform.paths.home(); const roots = [`${home}/.codex/sessions`, `${home}/.codex/archived_sessions`];
   const entries = (await Promise.all(roots.map((root) => recursiveJsonl(platform, root)))).flat();
-  const files = entries.map((entry) => ({ path: entry.path, pathHash: stableHash(entry.path), size: entry.size, modifiedAt: entry.modifiedAt }));
+  const files = [];
+  for (const entry of entries) {
+    const meta = await peekCodexSessionMeta(platform, entry);
+    files.push({ path: entry.path, logicalId: meta.sessionId, pathHash: stableHash(entry.path), size: entry.size, modifiedAt: entry.modifiedAt });
+  }
   files.sort((left, right) => left.pathHash.localeCompare(right.pathHash) || left.path.localeCompare(right.path));
   return { files: files.map(({ path, ...file }) => ({ path, ...file })), fingerprint: stableHash(JSON.stringify(files.map(({ path: _path, ...file }) => file))) };
 }
