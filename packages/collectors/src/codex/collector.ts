@@ -1,4 +1,5 @@
 import type { FileCursor } from "@lw-aiusage/storage";
+import type { TokenUsage } from "@lw-aiusage/core";
 import type {
   Collector,
   CollectorContext,
@@ -9,7 +10,7 @@ import type {
 } from "../types";
 import { parseJsonl, readText } from "../shared/jsonl";
 import { parseCodexEvent } from "./parser";
-import type { UnknownCodexEvent } from "./types";
+import type { CodexParseContext, UnknownCodexEvent } from "./types";
 
 const isJsonl = (entry: { isFile: boolean; name: string }): boolean =>
   entry.isFile && entry.name.toLowerCase().endsWith(".jsonl");
@@ -31,7 +32,8 @@ async function recursiveJsonl(
 export class CodexCollector implements Collector {
   readonly source = "codex" as const;
   readonly name = "Codex";
-  readonly parserVersion = 2;
+  readonly parserVersion = 3;
+  private readonly sessionTotals = new Map<string, TokenUsage>();
   async roots(context: CollectorContext): Promise<string[]> {
     const home = await context.platform.paths.home();
     return [`${home}/.codex/sessions`, `${home}/.codex/archived_sessions`];
@@ -49,13 +51,18 @@ export class CodexCollector implements Collector {
     return { installed, dataAvailable: files.length > 0, roots };
   }
   async discoverFiles(context: CollectorContext): Promise<CollectorFile[]> {
+    for (const cursor of context.cursors ?? []) {
+      const sessionId = cursor.parserState?.sessionId;
+      const totalUsage = cursor.parserState?.previousTotalUsage;
+      if (sessionId && totalUsage) this.sessionTotals.set(sessionId, { ...totalUsage });
+    }
     return (
       await Promise.all(
         (await this.roots(context)).map((root) =>
           recursiveJsonl(context.platform.fs, root),
         ),
       )
-    ).flat();
+    ).flat().sort((left, right) => left.path.localeCompare(right.path));
   }
 
   async scanFile(context: FileScanContext): Promise<FileScanResult> {
@@ -88,14 +95,15 @@ export class CodexCollector implements Collector {
           readText(buffer),
           canResume ? (previous?.pendingText ?? "") : "",
         );
-    let state = previous?.parserState
+    let state: CodexParseContext = canResume && previous?.parserState
       ? {
           ...previous.parserState,
           projectKey: previous.parserState.projectKey ?? "unknown",
-        }
+        } as CodexParseContext
       : { projectKey: "unknown" };
     const records = [];
     for (const [index, event] of parsed.values.entries()) {
+      if (state.forkedFromSessionId && !state.forkBaselineUsage) state.forkBaselineUsage = this.sessionTotals.get(state.forkedFromSessionId);
       const result = parseCodexEvent(
         event,
         state,
@@ -103,6 +111,8 @@ export class CodexCollector implements Collector {
         index + start,
       );
       state = result.state;
+      if (state.forkedFromSessionId && !state.forkBaselineUsage) state.forkBaselineUsage = this.sessionTotals.get(state.forkedFromSessionId);
+      if (state.sessionId && state.previousTotalUsage) this.sessionTotals.set(state.sessionId, { ...state.previousTotalUsage });
       if (result.record) records.push(result.record);
     }
     return {

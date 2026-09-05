@@ -4,8 +4,14 @@ export interface UnknownCodexEvent {
   payload?: unknown;
   [key: string]: unknown;
 }
-import type { UsageParserState } from "@lw-aiusage/core";
+import type { TokenUsage, UsageParserState } from "@lw-aiusage/core";
 
-export interface CodexParseContext extends UsageParserState {
+export interface CodexParserState extends UsageParserState {
+  forkedFromSessionId?: string;
+  forkBaselineUsage?: TokenUsage;
+  forkBaselineApplied?: boolean;
+}
+
+export interface CodexParseContext extends CodexParserState {
   projectKey: string;
 }

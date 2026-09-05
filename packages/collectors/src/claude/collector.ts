@@ -8,7 +8,7 @@ import type {
 } from "../types";
 import { parseJsonl, readText } from "../shared/jsonl";
 import { parseClaudeEvent } from "./parser";
-import type { UnknownClaudeEvent } from "./types";
+import type { ClaudeParseContext, UnknownClaudeEvent } from "./types";
 
 const isJsonl = (entry: { isFile: boolean; name: string }): boolean =>
   entry.isFile && entry.name.toLowerCase().endsWith(".jsonl");
@@ -29,7 +29,7 @@ async function recursiveJsonl(
 export class ClaudeCollector implements Collector {
   readonly source = "claude" as const;
   readonly name = "Claude Code";
-  readonly parserVersion = 2;
+  readonly parserVersion = 3;
   async roots(context: CollectorContext): Promise<string[]> {
     const home = await context.platform.paths.home();
     return [`${home}/.claude/projects`];
@@ -43,7 +43,7 @@ export class ClaudeCollector implements Collector {
       await Promise.all(
         roots.map((root) => recursiveJsonl(context.platform.fs, root)),
       )
-    ).flat();
+    ).flat().sort((left, right) => left.path.localeCompare(right.path));
     return { installed, dataAvailable: files.length > 0, roots };
   }
   async discoverFiles(context: CollectorContext): Promise<CollectorFile[]> {
@@ -85,14 +85,14 @@ export class ClaudeCollector implements Collector {
           readText(buffer),
           canResume ? (previous?.pendingText ?? "") : "",
         );
-    let state = previous?.parserState
+    let state: ClaudeParseContext = canResume && previous?.parserState
       ? {
           ...previous.parserState,
           projectKey:
             previous.parserState.projectKey ??
             context.file.path.split(/[\\/]/).at(-2) ??
             "unknown",
-        }
+        } as ClaudeParseContext
       : { projectKey: context.file.path.split(/[\\/]/).at(-2) ?? "unknown" };
     const records = [];
     for (const [index, event] of parsed.values.entries()) {

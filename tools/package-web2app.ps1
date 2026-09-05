@@ -37,6 +37,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $sourceDirectory 'index.html'))) { t
 if (-not (Test-Path -LiteralPath $iconPath)) { throw "Icon asset not found: $iconPath" }
 
 New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
+if (Test-Path -LiteralPath $outputPath) { Remove-Item -LiteralPath $outputPath -Force }
 $pack = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
   -ArgumentList @(
     'pack', $sourceDirectory, $outputPath,

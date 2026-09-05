@@ -45,6 +45,7 @@ export class SyncManager {
     for (const collector of this.collectors) {
       const discovered = await collector.discoverFiles({
         platform: this.platform,
+        cursors,
         parser: this.parser,
         onProgress,
       });
@@ -66,6 +67,7 @@ export class SyncManager {
           platform: this.platform,
           file,
           cursor,
+          cursors,
           parser: this.parser,
           onProgress,
         });

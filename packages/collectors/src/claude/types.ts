@@ -9,8 +9,13 @@ export interface UnknownClaudeEvent {
   message?: unknown;
   [key: string]: unknown;
 }
-import type { UsageParserState } from "@lw-aiusage/core";
+import type { TokenUsage, UsageParserState } from "@lw-aiusage/core";
 
-export interface ClaudeParseContext extends UsageParserState {
+export interface ClaudeParserState extends UsageParserState {
+  /** Latest usage per stable Claude message/request identity, bounded by the parser. */
+  seenUsage?: Record<string, TokenUsage>;
+}
+
+export interface ClaudeParseContext extends ClaudeParserState {
   projectKey: string;
 }

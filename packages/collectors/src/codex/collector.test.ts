@@ -22,4 +22,25 @@ describe("Codex collector", () => {
     });
     expect(second.records).toHaveLength(0);
   });
+  it("does not inherit stale totals during a full rescan", async () => {
+    const platform = createFixturePlatform({ "/fixture/.codex/sessions/demo.jsonl": '{"type":"turn_context","payload":{"model":"gpt-5-codex"}}\n{"payload":{"info":{"total_token_usage":{"input_tokens":1000}}}}\n' });
+    const collector = new CodexCollector();
+    const file = (await collector.discoverFiles({ platform }))[0]!;
+    const result = await collector.scanFile({ platform, file, cursor: { key: "codex:" + file.path, source: "codex", path: file.path, offset: file.size, size: file.size, modifiedAt: file.modifiedAt, pendingText: "", parserVersion: 2, parserState: { projectKey: "demo", previousTotalUsage: { inputTokens: 50000, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } } } });
+    expect(result.records[0]?.usage.inputTokens).toBe(1000);
+  });
+  it("subtracts the parent baseline from a child fork replay", async () => {
+    const platform = createFixturePlatform({
+      "/fixture/.codex/sessions/01-parent.jsonl": '{"type":"session_meta","payload":{"id":"parent","cwd":"demo"}}\n{"payload":{"model":"gpt-5-codex","info":{"total_token_usage":{"input_tokens":1000}}}}\n',
+      "/fixture/.codex/sessions/02-child.jsonl": '{"type":"session_meta","payload":{"id":"child","forked_from_id":"parent","cwd":"demo"}}\n{"payload":{"model":"gpt-5-codex","info":{"total_token_usage":{"input_tokens":1000}}}}\n{"payload":{"info":{"total_token_usage":{"input_tokens":1200}}}}\n',
+    });
+    const collector = new CodexCollector();
+    const files = await collector.discoverFiles({ platform });
+    const parent = await collector.scanFile({ platform, file: files[0]! });
+    const restartedCollector = new CodexCollector();
+    const restartedFiles = await restartedCollector.discoverFiles({ platform, cursors: [parent.cursor] });
+    const child = await restartedCollector.scanFile({ platform, file: restartedFiles[1]! });
+    expect(child.records).toHaveLength(1);
+    expect(child.records[0]?.usage.inputTokens).toBe(200);
+  });
 });

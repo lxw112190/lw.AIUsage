@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseCodexEvent } from "./parser";
 import { parseJsonl } from "../shared/jsonl";
+import { zeroUsage } from "@lw-aiusage/core";
 
 describe("Codex parser", () => {
   it("normalizes token usage without retaining content", () => {
@@ -85,6 +86,18 @@ describe("Codex parser", () => {
     expect(first.record?.usage.inputTokens).toBe(1000);
     expect(second.record?.usage.inputTokens).toBe(800);
     expect(third.record?.usage.inputTokens).toBe(700);
+  });
+  it("supports payload.msg.info and model changes from info", () => {
+    const modelEvent = parseCodexEvent({ type: "turn_context", payload: { info: { model: "gpt-5-codex" } } }, { projectKey: "demo" }, "fixture", 1);
+    const usageEvent = parseCodexEvent({ type: "event_msg", payload: { msg: { type: "token_count", info: { last_token_usage: { input_tokens: 10, output_tokens: 5 } } } } }, modelEvent.state, "fixture", 2);
+    expect(usageEvent.record?.model).toBe("gpt-5-codex");
+    expect(usageEvent.record?.usage.outputTokens).toBe(5);
+  });
+  it("takes session_meta payload.id and skips a fork replay baseline", () => {
+    const meta = parseCodexEvent({ type: "session_meta", payload: { id: "session-1", forked_from_id: "parent" } }, { projectKey: "demo" }, "fixture", 1);
+    const first = parseCodexEvent({ payload: { model: "gpt-5-codex", info: { total_token_usage: { input_tokens: 1000 } } } }, { ...meta.state, forkBaselineUsage: { ...zeroUsage(), inputTokens: 1000 } }, "fixture", 2);
+    expect(meta.state.sessionId).toBe("session-1");
+    expect(first.record).toBeUndefined();
   });
   it("keeps an incomplete final line for the next range", () => {
     const result = parseJsonl<{ type: string }>(

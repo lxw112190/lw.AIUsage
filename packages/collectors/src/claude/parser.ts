@@ -1,6 +1,6 @@
-import type { UsageRecord } from "@lw-aiusage/core";
+import type { TokenUsage, UsageRecord } from "@lw-aiusage/core";
 import { zeroUsage } from "@lw-aiusage/core";
-import { objectValue, stableEventId, stringValue } from "../shared/identity";
+import { objectValue, stableEventId, stableHash, stringValue } from "../shared/identity";
 import type { ClaudeParseContext, UnknownClaudeEvent } from "./types";
 
 const numberAt = (value: unknown, key: string): number => {
@@ -14,6 +14,7 @@ const stringAt = (value: unknown, ...keys: string[]): string | undefined => {
   for (const key of keys) current = objectValue(current)?.[key];
   return stringValue(current);
 };
+const firstString = (value: unknown, ...keys: string[]): string | undefined => { for (const key of keys) { const candidate = stringAt(value, key); if (candidate) return candidate; } return undefined; };
 const timestampOf = (event: UnknownClaudeEvent, fallback: number): number => {
   if (typeof event.timestamp === "number")
     return event.timestamp < 10_000_000_000
@@ -30,6 +31,7 @@ const projectName = (cwd: string | undefined, fallback: string): string => {
   const normalized = cwd.replace(/[\\/]+$/, "");
   return normalized.split(/[\\/]/).at(-1) || fallback;
 };
+const sameUsage = (left: TokenUsage, right: TokenUsage): boolean => JSON.stringify(left) === JSON.stringify(right);
 
 export interface ClaudeParseResult {
   record?: UsageRecord;
@@ -59,16 +61,17 @@ export function parseClaudeEvent(
     stringAt(message, "model") ??
     stringAt(event, "model") ??
     context.currentModel;
-  const sessionId =
-    stringAt(event, "sessionId", "session_id") ?? context.sessionId;
+  const sessionId = firstString(event, "sessionId", "session_id") ?? context.sessionId;
   const projectKey = projectName(
     stringAt(event, "cwd") ?? stringAt(message, "cwd"),
     context.projectKey,
   );
+  const seenUsage = { ...(context.seenUsage ?? {}) };
   const state: ClaudeParseContext = {
     sessionId,
     projectKey,
     currentModel: model,
+    seenUsage,
   };
   if (!hasUsage || !model) return { model, sessionId, projectKey, state };
   const normalized = zeroUsage();
@@ -77,12 +80,22 @@ export function parseClaudeEvent(
     usageObject,
     "cache_read_input_tokens",
   );
-  normalized.cacheCreationInputTokens = numberAt(
-    usageObject,
-    "cache_creation_input_tokens",
-  );
+  const cacheCreation = numberAt(usageObject, "cache_creation_input_tokens");
+  const cacheCreationDetails = objectValue(usageObject.cache_creation);
+  const ephemeralCreation = numberAt(cacheCreationDetails, "ephemeral_5m_input_tokens") + numberAt(cacheCreationDetails, "ephemeral_1h_input_tokens");
+  normalized.cacheCreationInputTokens = Math.max(cacheCreation, ephemeralCreation);
   normalized.outputTokens = numberAt(usageObject, "output_tokens");
-  const recordId = stableEventId("claude", sourceId, event, {
+  const messageId = firstString(message, "id");
+  const requestId = firstString(event, "requestId", "request_id") ?? firstString(message, "requestId", "request_id");
+  const usageKey = messageId ? `${messageId}:${requestId ?? ""}` : undefined;
+  const previousUsage = usageKey ? seenUsage[usageKey] : undefined;
+  if (usageKey) {
+    seenUsage[usageKey] = normalized;
+    const keys = Object.keys(seenUsage);
+    while (keys.length > 50_000) { const oldest = keys.shift(); if (oldest) delete seenUsage[oldest]; }
+  }
+  if (previousUsage && sameUsage(previousUsage, normalized)) return { model, sessionId, projectKey, state };
+  const recordId = usageKey ? `claude:${stableHash(`${sourceId}\n${usageKey}`)}` : stableEventId("claude", sourceId, event, {
     timestamp: event.timestamp,
     usage: usageObject,
     model,

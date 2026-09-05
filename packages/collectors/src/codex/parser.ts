@@ -139,15 +139,20 @@ export function parseCodexEvent(
   _lineIndex: number,
 ): CodexParseResult {
   const payload = objectValue(event.payload) ?? event;
-  const info = objectValue(payload.info) ?? objectValue(event.info);
-  const lastNode = info?.last_token_usage ?? info?.lastTokenUsage;
-  const totalNode = info?.total_token_usage ?? info?.totalTokenUsage;
+  const msg = objectValue(payload.msg);
+  const nestedInfo = objectValue(payload.info) ?? objectValue(msg?.info) ?? objectValue(event.info);
+  const lastNode = nestedInfo?.last_token_usage ?? nestedInfo?.lastTokenUsage;
+  const totalNode = nestedInfo?.total_token_usage ?? nestedInfo?.totalTokenUsage;
   const model =
     stringAt(payload, "model") ??
+    stringAt(nestedInfo, "model") ??
+    stringAt(msg, "model") ??
     stringAt(event, "model") ??
     context.currentModel;
-  const sessionId =
+  const eventType = stringAt(event, "type");
+  const sessionId = (eventType === "session_meta" ? firstString(payload, "id") : undefined) ??
     firstString(payload, "session_id", "sessionId") ??
+    firstString(msg, "session_id", "sessionId") ??
     firstString(event, "session_id", "sessionId") ??
     context.sessionId;
   const projectKey =
@@ -155,11 +160,17 @@ export function parseCodexEvent(
     stringAt(payload, "project") ??
     context.projectKey;
   const state: CodexParseContext = {
+    ...context,
     sessionId,
     projectKey,
     currentModel: model,
     previousTotalUsage: context.previousTotalUsage,
   };
+  const forkedFromSessionId = firstString(payload, "forked_from_id", "forkedFromId") ?? firstString(msg, "forked_from_id", "forkedFromId");
+  if (forkedFromSessionId) {
+    state.forkedFromSessionId = forkedFromSessionId;
+    state.forkBaselineApplied = false;
+  }
   const flatUsageNode =
     objectValue(payload.usage) ??
     (hasUsageFields(payload) ? payload : undefined);
@@ -172,15 +183,19 @@ export function parseCodexEvent(
       ? normalizeUsage(rawUsageOf(totalNode))
       : undefined;
   if (normalizedTotal) state.previousTotalUsage = normalizedTotal;
+  const previousTotal = context.previousTotalUsage ?? state.forkBaselineUsage;
   const usage =
     lastNode && hasUsageFields(lastNode)
-      ? normalizeUsage(rawUsageOf(lastNode))
+      ? totalNode && state.forkBaselineUsage && !context.previousTotalUsage
+        ? subtractUsage(normalizeUsage(rawUsageOf(totalNode)), state.forkBaselineUsage)
+        : normalizeUsage(rawUsageOf(lastNode))
       : totalNode
         ? subtractUsage(
             normalizeUsage(rawUsageOf(usageNode)),
-            context.previousTotalUsage,
+            previousTotal,
           )
         : normalizeUsage(rawUsageOf(usageNode));
+  if (totalNode && state.forkBaselineUsage && !context.previousTotalUsage) state.forkBaselineApplied = true;
   if (!hasTokens(usage)) return { model, sessionId, projectKey, state };
 
   const timestamp = timestampOf(event, Date.now());

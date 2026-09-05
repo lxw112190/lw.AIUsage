@@ -5,6 +5,7 @@ import type { FileCursor } from "@lw-aiusage/storage";
 export interface CollectorContext {
   platform: RuntimePlatform;
   cursor?: FileCursor;
+  cursors?: readonly FileCursor[];
   parser?: JsonlParserPort;
   onProgress?: (progress: CollectorProgress) => void;
 }
