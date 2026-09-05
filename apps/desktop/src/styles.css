@@ -446,6 +446,34 @@ td {
 .setting-row:last-child {
   border-bottom: 0;
 }
+.audit-result {
+  padding: 22px 24px;
+  background: #fbfbfd;
+  border-bottom: 1px solid var(--line);
+}
+.audit-summary {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(180px, 1fr);
+  gap: 8px 18px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.audit-summary strong {
+  color: var(--ink);
+}
+.audit-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.audit-subheading {
+  margin-top: 20px;
+  font-size: 13px;
+}
 .setting-row p {
   font-size: 13px;
   color: var(--muted);

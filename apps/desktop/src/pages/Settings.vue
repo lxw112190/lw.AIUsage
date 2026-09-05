@@ -8,6 +8,13 @@ const settings = useSettingsStore();
 const usage = useUsageStore();
 const { t } = useI18n();
 const busy = ref(false);
+const auditBusy = ref(false);
+const formatTokens = (value: number): string =>
+  value >= 1_000_000_000
+    ? `${(value / 1_000_000_000).toFixed(2)}B`
+    : value >= 1_000_000
+      ? `${(value / 1_000_000).toFixed(2)}M`
+      : value.toLocaleString();
 function changeLanguage(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   settings.setLanguage(value === "zh" ? "zh" : "en");
@@ -29,6 +36,14 @@ async function rebuild(): Promise<void> {
 async function resetData(): Promise<void> {
   if (!window.confirm(t("confirm.reset"))) return;
   await usage.resetLocalData();
+}
+async function generateAudit(): Promise<void> {
+  auditBusy.value = true;
+  try {
+    await usage.exportUsageAudit();
+  } finally {
+    auditBusy.value = false;
+  }
 }
 </script>
 
@@ -54,6 +69,45 @@ async function resetData(): Promise<void> {
           <option value="zh">{{ t("settings.chinese") }}</option>
           <option value="en">{{ t("settings.english") }}</option>
         </select>
+      </div>
+      <div class="setting-row">
+        <div>
+          <h3>{{ t("settings.audit") }}</h3>
+          <p>{{ t("settings.auditDescription") }}</p>
+        </div>
+        <button class="setting-action" :disabled="auditBusy" @click="generateAudit">
+          {{ auditBusy ? t("settings.rebuilding") : t("settings.auditAction") }}
+        </button>
+      </div>
+      <div v-if="usage.rebuildAudit" class="audit-result">
+        <h3>{{ t("settings.rebuildResult") }}</h3>
+        <div class="audit-summary">
+          <span>{{ t("settings.auditRecords") }}</span><strong>{{ usage.rebuildAudit.before.recordCount.toLocaleString() }} → {{ usage.rebuildAudit.after.recordCount.toLocaleString() }}</strong>
+          <span>{{ t("settings.auditSessions") }}</span><strong>{{ usage.rebuildAudit.before.sessionCount.toLocaleString() }} → {{ usage.rebuildAudit.after.sessionCount.toLocaleString() }}</strong>
+          <span>{{ t("settings.auditCurrent") }}</span><strong>{{ formatTokens(usage.rebuildAudit.before.totals.currentTotal) }} → {{ formatTokens(usage.rebuildAudit.after.totals.currentTotal) }}</strong>
+          <span>{{ t("settings.auditWithoutCached") }}</span><strong>{{ formatTokens(usage.rebuildAudit.after.totals.withoutCached) }}</strong>
+          <span>{{ t("settings.auditWithoutCreation") }}</span><strong>{{ formatTokens(usage.rebuildAudit.after.totals.withoutCacheCreation) }}</strong>
+          <span>{{ t("settings.auditWithoutReasoning") }}</span><strong>{{ formatTokens(usage.rebuildAudit.after.totals.withoutReasoning) }}</strong>
+          <span>{{ t("settings.auditWithoutAllCache") }}</span><strong>{{ formatTokens(usage.rebuildAudit.after.totals.withoutAllCache) }}</strong>
+          <span>{{ t("settings.auditPlainIo") }}</span><strong>{{ formatTokens(usage.rebuildAudit.after.totals.plainInputOutput) }}</strong>
+          <span>{{ t("settings.auditRawIo") }}</span><strong>{{ formatTokens(usage.rebuildAudit.after.totals.rawIoEquivalent) }}</strong>
+          <span>{{ t("settings.change") }}</span><strong>{{ formatTokens(usage.rebuildAudit.difference.tokens) }} ({{ usage.rebuildAudit.difference.percent.toFixed(1) }}%)</strong>
+        </div>
+        <div class="audit-breakdown">
+          <span>{{ t("settings.auditInput") }}: {{ formatTokens(usage.rebuildAudit.after.usage.inputTokens) }}</span>
+          <span>{{ t("settings.auditCached") }}: {{ formatTokens(usage.rebuildAudit.after.usage.cachedInputTokens) }}</span>
+          <span>{{ t("settings.auditCreation") }}: {{ formatTokens(usage.rebuildAudit.after.usage.cacheCreationInputTokens) }}</span>
+          <span>{{ t("settings.auditOutput") }}: {{ formatTokens(usage.rebuildAudit.after.usage.outputTokens) }}</span>
+          <span>{{ t("settings.auditReasoning") }}: {{ formatTokens(usage.rebuildAudit.after.usage.reasoningOutputTokens) }}</span>
+        </div>
+      </div>
+      <div v-if="usage.auditReport" class="audit-result">
+        <h3>{{ t("settings.auditSources") }}</h3>
+        <div class="audit-breakdown"><span v-for="item in usage.auditReport.bySource" :key="item.source">{{ item.source }}: {{ formatTokens(item.totals.currentTotal) }} / {{ item.recordCount }} {{ t("settings.auditRecords") }}</span></div>
+        <h3 class="audit-subheading">{{ t("settings.auditModels") }}</h3>
+        <div class="audit-breakdown"><span v-for="item in usage.auditReport.byModel" :key="item.model">{{ item.model }}: {{ formatTokens(item.totals.currentTotal) }}</span></div>
+        <h3 class="audit-subheading">{{ t("settings.auditPeakDays") }}</h3>
+        <div class="audit-breakdown"><span v-for="item in usage.auditReport.peakDays.slice(0, 5)" :key="item.day">{{ item.day }}: {{ formatTokens(item.totals.currentTotal) }}</span></div>
       </div>
       <div class="setting-row">
         <div>

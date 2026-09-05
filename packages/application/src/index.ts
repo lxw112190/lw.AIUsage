@@ -4,3 +4,4 @@ export * from "./diagnostics";
 export * from "./detection";
 export * from "./sessionReconcile";
 export * from "./watchManager";
+export * from "./usageAudit";
