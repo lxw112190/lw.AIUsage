@@ -7,11 +7,30 @@ import type {
   FileScanResult,
 } from "../types";
 import { parseJsonl, readText } from "../shared/jsonl";
+import { objectValue, stringValue } from "../shared/identity";
 import { parseClaudeEvent } from "./parser";
 import type { ClaudeParseContext, UnknownClaudeEvent } from "./types";
 
 const isJsonl = (entry: { isFile: boolean; name: string }): boolean =>
   entry.isFile && entry.name.toLowerCase().endsWith(".jsonl");
+const META_PEEK_BYTES = 64 * 1024;
+
+async function readClaudeSessionId(
+  platform: CollectorContext["platform"],
+  file: CollectorFile,
+): Promise<string | undefined> {
+  if (file.size <= 0) return undefined;
+  const bytes = await platform.fs.readRange(file.path, 0, Math.min(file.size, META_PEEK_BYTES));
+  const parsed = parseJsonl<UnknownClaudeEvent>(readText(bytes), "");
+  for (const event of parsed.values) {
+    const sessionId = stringValue(event.sessionId) ?? stringValue(event.session_id);
+    if (sessionId) return sessionId;
+    const message = objectValue(event.message);
+    const messageSessionId = stringValue(message?.sessionId) ?? stringValue(message?.session_id);
+    if (messageSessionId) return messageSessionId;
+  }
+  return undefined;
+}
 async function recursiveJsonl(
   fs: CollectorContext["platform"]["fs"],
   root: string,
@@ -47,13 +66,18 @@ export class ClaudeCollector implements Collector {
     return { installed, dataAvailable: files.length > 0, roots };
   }
   async discoverFiles(context: CollectorContext): Promise<CollectorFile[]> {
-    return (
+    const files = (
       await Promise.all(
         (await this.roots(context)).map((root) =>
           recursiveJsonl(context.platform.fs, root),
         ),
       )
     ).flat();
+    return Promise.all(files.map(async (file) => {
+      const cursor = context.cursors?.find((item) => item.source === this.source && item.path === file.path);
+      const logicalId = cursor?.logicalId ?? cursor?.parserState?.sessionId ?? (await readClaudeSessionId(context.platform, file));
+      return logicalId ? { ...file, logicalId } : file;
+    }));
   }
   async scanFile(context: FileScanContext): Promise<FileScanResult> {
     const previous = context.cursor;
@@ -101,6 +125,7 @@ export class ClaudeCollector implements Collector {
         state,
         context.file.path,
         index + start,
+        context.file.logicalId,
       );
       state = result.state;
       if (result.record) records.push(result.record);
@@ -113,6 +138,7 @@ export class ClaudeCollector implements Collector {
         key: `${this.source}:${context.file.path}`,
         source: this.source,
         path: context.file.path,
+        logicalId: context.file.logicalId ?? state.sessionId,
         offset: start + buffer.byteLength,
         size: context.file.size,
         modifiedAt: context.file.modifiedAt,

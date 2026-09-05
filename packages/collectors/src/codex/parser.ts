@@ -137,6 +137,7 @@ export function parseCodexEvent(
   context: CodexParseContext,
   sourceId: string,
   _lineIndex: number,
+  logicalId?: string,
 ): CodexParseResult {
   const payload = objectValue(event.payload) ?? event;
   const msg = objectValue(payload.msg);
@@ -199,7 +200,8 @@ export function parseCodexEvent(
   if (!hasTokens(usage)) return { model, sessionId, projectKey, state };
 
   const timestamp = timestampOf(event, Date.now());
-  const recordId = stableEventId("codex", sourceId, event, {
+  const stableSourceId = logicalId ?? state.sessionId ?? sourceId;
+  const recordId = stableEventId("codex", stableSourceId, event, {
     timestamp: event.timestamp,
     turnId: stringAt(payload, "turn_id", "turnId"),
     responseId: stringAt(payload, "response_id", "responseId"),

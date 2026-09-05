@@ -38,8 +38,8 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 20
     env:
-      WEB2APP_VERSION: v0.2.6
-      WEB2APP_SHA256: 669b4fab5b327bbca83e9351474e2b8531220d05cba81d5fe3033573f3ec3bc4
+      WEB2APP_VERSION: v0.2.7
+      WEB2APP_SHA256: 2a51f2dbda1df01cdfb3209fffaffdc85305ae4b1ad482dbec06e2c130883240
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

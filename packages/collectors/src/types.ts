@@ -28,6 +28,8 @@ export interface CollectorDetection {
 }
 export interface CollectorFile extends FileEntry {
   source: AgentSource;
+  /** Stable logical identity independent of the current filesystem path. */
+  logicalId?: string;
 }
 export interface FileScanContext extends CollectorContext {
   file: CollectorFile;

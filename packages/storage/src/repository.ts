@@ -1,4 +1,5 @@
 import type {
+  AgentSource,
   ProjectRecord,
   SessionRecord,
   UsageBucket,
@@ -8,8 +9,9 @@ import type {
 
 export interface FileCursor {
   key: string;
-  source: string;
+  source: AgentSource;
   path: string;
+  logicalId?: string;
   offset: number;
   size: number;
   modifiedAt: number;
@@ -19,6 +21,12 @@ export interface FileCursor {
 }
 export interface CommitScanOptions {
   replaceRecords?: boolean;
+}
+export interface MigratedFile {
+  path: string;
+  size: number;
+  modifiedAt: number;
+  logicalId?: string;
 }
 export interface UsageQuery {
   from?: number;
@@ -34,6 +42,7 @@ export interface UsageRepository {
     cursor: FileCursor,
     options?: CommitScanOptions,
   ): Promise<number>;
+  migrateFileCursor(oldCursor: FileCursor, newFile: MigratedFile): Promise<FileCursor>;
   getRecords(query?: UsageQuery): Promise<UsageRecord[]>;
   getBuckets(query?: UsageQuery): Promise<UsageBucket[]>;
   putBuckets(buckets: readonly UsageBucket[]): Promise<void>;
@@ -81,6 +90,14 @@ export class MemoryUsageRepository implements UsageRepository {
     changed += await this.putRecords(records);
     await this.putCursor(cursor);
     return changed;
+  }
+  async migrateFileCursor(oldCursor: FileCursor, newFile: MigratedFile): Promise<FileCursor> {
+    const reset = newFile.size < oldCursor.offset;
+    const newCursor: FileCursor = { ...oldCursor, key: `${oldCursor.source}:${newFile.path}`, path: newFile.path, logicalId: newFile.logicalId ?? oldCursor.logicalId ?? oldCursor.parserState?.sessionId, size: newFile.size, modifiedAt: newFile.modifiedAt, ...(reset ? { offset: 0, pendingText: "", parserState: undefined } : {}) };
+    for (const [id, record] of this.records) if (record.source === oldCursor.source && record.sourcePath === oldCursor.path) this.records.set(id, { ...record, sourcePath: newFile.path });
+    this.cursors.delete(oldCursor.key);
+    this.cursors.set(newCursor.key, newCursor);
+    return newCursor;
   }
   async getRecords(query: UsageQuery = {}): Promise<UsageRecord[]> {
     return [...this.records.values()]

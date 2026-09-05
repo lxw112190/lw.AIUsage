@@ -9,11 +9,33 @@ import type {
   FileScanResult,
 } from "../types";
 import { parseJsonl, readText } from "../shared/jsonl";
+import { objectValue, stringValue } from "../shared/identity";
 import { parseCodexEvent } from "./parser";
 import type { CodexParseContext, UnknownCodexEvent } from "./types";
 
 const isJsonl = (entry: { isFile: boolean; name: string }): boolean =>
   entry.isFile && entry.name.toLowerCase().endsWith(".jsonl");
+const META_PEEK_BYTES = 64 * 1024;
+
+export interface CodexSessionMeta {
+  sessionId?: string;
+  forkedFromId?: string;
+}
+
+export async function readCodexSessionMeta(
+  platform: CollectorContext["platform"],
+  file: CollectorFile,
+): Promise<CodexSessionMeta> {
+  if (file.size <= 0) return {};
+  const bytes = await platform.fs.readRange(file.path, 0, Math.min(file.size, META_PEEK_BYTES));
+  const parsed = parseJsonl<UnknownCodexEvent>(readText(bytes), "");
+  for (const event of parsed.values) {
+    if (event.type !== "session_meta") continue;
+    const payload = objectValue(event.payload) ?? event;
+    return { sessionId: stringValue(payload.id) ?? stringValue(payload.session_id) ?? stringValue(payload.sessionId), forkedFromId: stringValue(payload.forked_from_id) ?? stringValue(payload.forkedFromId) };
+  }
+  return {};
+}
 async function recursiveJsonl(
   fs: CollectorContext["platform"]["fs"],
   root: string,
@@ -56,13 +78,18 @@ export class CodexCollector implements Collector {
       const totalUsage = cursor.parserState?.previousTotalUsage;
       if (sessionId && totalUsage) this.sessionTotals.set(sessionId, { ...totalUsage });
     }
-    return (
+    const files = (
       await Promise.all(
         (await this.roots(context)).map((root) =>
           recursiveJsonl(context.platform.fs, root),
         ),
       )
     ).flat().sort((left, right) => left.path.localeCompare(right.path));
+    return Promise.all(files.map(async (file) => {
+      const cursor = context.cursors?.find((item) => item.source === this.source && item.path === file.path);
+      const logicalId = cursor?.logicalId ?? cursor?.parserState?.sessionId ?? (await readCodexSessionMeta(context.platform, file)).sessionId;
+      return logicalId ? { ...file, logicalId } : file;
+    }));
   }
 
   async scanFile(context: FileScanContext): Promise<FileScanResult> {
@@ -109,6 +136,7 @@ export class CodexCollector implements Collector {
         state,
         context.file.path,
         index + start,
+        context.file.logicalId,
       );
       state = result.state;
       if (state.forkedFromSessionId && !state.forkBaselineUsage) state.forkBaselineUsage = this.sessionTotals.get(state.forkedFromSessionId);
@@ -123,6 +151,7 @@ export class CodexCollector implements Collector {
         key: `${this.source}:${context.file.path}`,
         source: this.source,
         path: context.file.path,
+        logicalId: context.file.logicalId ?? state.sessionId,
         offset: start + buffer.byteLength,
         size: context.file.size,
         modifiedAt: context.file.modifiedAt,

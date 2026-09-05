@@ -46,6 +46,7 @@ export function parseClaudeEvent(
   context: ClaudeParseContext,
   sourceId: string,
   _lineIndex: number,
+  logicalId?: string,
 ): ClaudeParseResult {
   const message = objectValue(event.message);
   const usageObject = objectValue(message?.usage ?? objectValue(event)?.usage);
@@ -95,7 +96,8 @@ export function parseClaudeEvent(
     while (keys.length > 50_000) { const oldest = keys.shift(); if (oldest) delete seenUsage[oldest]; }
   }
   if (previousUsage && sameUsage(previousUsage, normalized)) return { model, sessionId, projectKey, state };
-  const recordId = usageKey ? `claude:${stableHash(`${sourceId}\n${usageKey}`)}` : stableEventId("claude", sourceId, event, {
+  const stableScope = logicalId ?? sessionId ?? sourceId;
+  const recordId = usageKey ? `claude:${stableHash(`${stableScope}\n${usageKey}`)}` : stableEventId("claude", stableScope, event, {
     timestamp: event.timestamp,
     usage: usageObject,
     model,

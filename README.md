@@ -43,7 +43,7 @@
 - pnpm 11.19.0
 - Python 3 与 Pillow（仅在重新生成 ICO 图标时需要）
 - Windows 10 1809+ 或 Windows 11 x64，以及 WebView2 Evergreen Runtime（仅在运行打包后的 EXE 时需要）
-- [`lw.Web2App`](https://github.com/lxw112190/lw.Web2App) v0.2.6 或更高版本（仅在本地打包 EXE 时需要）
+- [`lw.Web2App`](https://github.com/lxw112190/lw.Web2App) v0.2.7 或更高版本（仅在本地打包 EXE 时需要）
 
 ## 本地开发
 
@@ -106,7 +106,7 @@ pnpm package:web2app -- -Web2AppRoot 'C:\path\to\lw.Web2App'
 
 GitHub Actions 会在每次推送和 Pull Request 中执行代码检查、类型检查、测试和 Web 构建，然后在 Windows Runner 上生成并校验 EXE。
 
-- 工作流固定使用 [`lw.Web2App v0.2.6`](https://github.com/lxw112190/lw.Web2App/releases/tag/v0.2.6) 的 `lw.Web2App-windows-x64.zip`，下载后会先校验官方发布包的 SHA-256。
+- 工作流固定使用 [`lw.Web2App v0.2.7`](https://github.com/lxw112190/lw.Web2App/releases/tag/v0.2.7) 的 `lw.Web2App-windows-x64.zip`，下载后会先校验官方发布包的 SHA-256。
 - 每次成功运行都会提供名为 `lw.AIUsage-windows-x64` 的 Artifact，内含 `lw.AIUsage.exe` 和 `SHA256SUMS.txt`，保留 30 天。
 - 推送 `v*` 标签时，同一组文件会自动发布到对应的 GitHub Release，供长期下载。
 

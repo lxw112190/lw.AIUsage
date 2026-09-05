@@ -113,6 +113,17 @@ export class DexieUsageRepository implements UsageRepository {
     );
     return changed;
   }
+  async migrateFileCursor(oldCursor: FileCursor, newFile: { path: string; size: number; modifiedAt: number; logicalId?: string }): Promise<FileCursor> {
+    const reset = newFile.size < oldCursor.offset;
+    const newCursor: FileCursor = { ...oldCursor, key: `${oldCursor.source}:${newFile.path}`, path: newFile.path, logicalId: newFile.logicalId ?? oldCursor.logicalId ?? oldCursor.parserState?.sessionId, size: newFile.size, modifiedAt: newFile.modifiedAt, ...(reset ? { offset: 0, pendingText: "", parserState: undefined } : {}) };
+    await this.db.transaction("rw", this.db.records, this.db.cursors, async () => {
+      const oldRecords = await this.db.records.where("sourcePath").equals(oldCursor.path).toArray();
+      for (const record of oldRecords) if (record.source === oldCursor.source) await this.db.records.put({ ...record, sourcePath: newFile.path });
+      await this.db.cursors.delete(oldCursor.key);
+      await this.db.cursors.put(newCursor);
+    });
+    return newCursor;
+  }
   async getRecords(query: UsageQuery = {}): Promise<UsageRecord[]> {
     const collection =
       query.from !== undefined || query.to !== undefined
