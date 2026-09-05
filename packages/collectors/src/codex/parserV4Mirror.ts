@@ -12,6 +12,7 @@ import type {
   CodexUsageSource,
   ParserV4MirrorRecord,
   ParserV4MirrorSessionSummary,
+  V4ForkTrace,
 } from "./rawAuditTypes";
 import { canonicalizeMirrorFiles } from "./mirrorFileReconcile";
 
@@ -29,6 +30,7 @@ export interface ParserV4MirrorResult {
   discoveredFileCount: number;
   canonicalFileCount: number;
   shadowDuplicateCount: number;
+  forkTraces: V4ForkTrace[];
   records: Map<string, ParserV4MirrorRecord>;
   usage: TokenUsage;
   recordCount: number;
@@ -41,6 +43,8 @@ export interface ParserV4MirrorResult {
 interface MirrorEventResult {
   state: ParserV4MirrorState;
   record?: ParserV4MirrorRecord;
+  totalUsage?: TokenUsage;
+  lastUsage?: TokenUsage;
 }
 
 interface V4RawUsage {
@@ -114,7 +118,11 @@ const rawUsageOfV4 = (value: unknown): V4RawUsage => ({
     "cacheCreationInputTokens",
   ),
   output: firstNumberV4(value, "output_tokens", "outputTokens"),
-  reasoningOutput: firstNumberV4(value, "reasoning_output_tokens"),
+  reasoningOutput: firstNumberV4(
+    value,
+    "reasoning_output_tokens",
+    "reasoningOutputTokens",
+  ),
   total: firstNumberV4(value, "total_tokens", "totalTokens"),
 });
 
@@ -148,11 +156,12 @@ const hasUsageFieldsV4 = (value: unknown): boolean => {
     "total_tokens",
     "totalTokens",
     "reasoning_output_tokens",
+    "reasoningOutputTokens",
   ].some((key) => key in object);
 };
 
 const eventType = (event: CodexExtractedEvent): string | undefined =>
-  stringValue(event.raw.type);
+  event.semanticType ?? event.eventType ?? stringValue(event.raw.type);
 
 function mirrorEventV4(
   event: CodexExtractedEvent,
@@ -231,7 +240,7 @@ function mirrorEventV4(
       : normalizedFlat ?? zeroUsage();
   if (totalNode && normalizedTotal && state.forkBaselineUsage && !context.previousTotalUsage)
     state.forkBaselineApplied = true;
-  if (!hasTokens(usage)) return { state };
+  if (!hasTokens(usage)) return { state, totalUsage: normalizedTotal, lastUsage: normalizedLast };
 
   const timestamp =
     typeof event.raw.timestamp === "number" && Number.isFinite(event.raw.timestamp)
@@ -250,6 +259,8 @@ function mirrorEventV4(
   });
   return {
     state,
+    totalUsage: normalizedTotal,
+    lastUsage: normalizedLast,
     record: {
       id: recordId,
       sessionId,
@@ -287,6 +298,7 @@ export function replayCodexV4(
 ): ParserV4MirrorResult {
   const records = new Map<string, ParserV4MirrorRecord>();
   const sessionTotals = new Map<string, TokenUsage>();
+  const forkTraces = new Map<string, V4ForkTrace>();
   const canonicalFiles = canonicalizeMirrorFiles(files);
   const orderedFiles = [...canonicalFiles].sort((left, right) =>
     left.entry.path.localeCompare(right.entry.path),
@@ -308,6 +320,28 @@ export function replayCodexV4(
         state.forkBaselineUsage = sessionTotals.get(state.forkedFromSessionId);
       if (state.sessionId && state.previousTotalUsage)
         sessionTotals.set(state.sessionId, cloneUsage(state.previousTotalUsage));
+      if (
+        state.sessionId &&
+        state.forkedFromSessionId &&
+        (result.totalUsage || result.lastUsage) &&
+        !forkTraces.has(state.sessionId)
+      ) {
+        forkTraces.set(state.sessionId, {
+          childSessionId: state.sessionId,
+          parentSessionId: state.forkedFromSessionId,
+          baselineUsed: state.forkBaselineUsage
+            ? cloneUsage(state.forkBaselineUsage)
+            : undefined,
+          firstUsageEventId: result.record?.id,
+          firstTotal: result.totalUsage
+            ? cloneUsage(result.totalUsage)
+            : undefined,
+          firstLast: result.lastUsage ? cloneUsage(result.lastUsage) : undefined,
+          firstContribution: result.record
+            ? cloneUsage(result.record.usage)
+            : undefined,
+        });
+      }
       if (result.record) records.set(result.record.id, result.record);
     }
   }
@@ -337,6 +371,7 @@ export function replayCodexV4(
     discoveredFileCount: files.length,
     canonicalFileCount: canonicalFiles.length,
     shadowDuplicateCount: files.length - canonicalFiles.length,
+    forkTraces: [...forkTraces.values()],
     records,
     usage,
     recordCount: records.size,

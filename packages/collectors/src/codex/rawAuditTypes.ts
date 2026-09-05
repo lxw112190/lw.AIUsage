@@ -2,6 +2,7 @@ import type { TokenUsage } from "@lw-aiusage/core";
 import type { FileEntry } from "@lw-aiusage/platform";
 import type { UnknownCodexEvent } from "./types";
 import type { CodexRawCounters } from "./accounting";
+import type { CodexEventTypeInfo } from "./eventTaxonomy";
 
 export type CodexUsageSource =
   | "token-count"
@@ -23,6 +24,11 @@ export interface CodexExtractedEvent {
   last?: CodexRawCounters;
   flat?: CodexRawCounters;
   source?: CodexUsageSource;
+  outerType?: string;
+  payloadType?: string;
+  messageType?: string;
+  semanticType?: string;
+  isTokenCount: boolean;
 }
 
 export interface CodexExtractedFile {
@@ -48,4 +54,14 @@ export interface ParserV4MirrorSessionSummary {
   sessionId: string;
   recordCount: number;
   usage: TokenUsage;
+}
+
+export interface V4ForkTrace {
+  childSessionId: string;
+  parentSessionId: string;
+  baselineUsed?: TokenUsage;
+  firstUsageEventId?: string;
+  firstTotal?: TokenUsage;
+  firstLast?: TokenUsage;
+  firstContribution?: TokenUsage;
 }

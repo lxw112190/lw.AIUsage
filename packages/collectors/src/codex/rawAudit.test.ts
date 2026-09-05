@@ -53,6 +53,11 @@ describe("Codex raw audit", () => {
     expect(report.eventClasses["counter-reset"]).toBe(1);
     expect(report.resets.count).toBe(1);
     expect(report.resets.items[0]?.resetComponents).toContain("input");
+    expect(report.resets.currentEqualsLast).toBe(0);
+    expect(report.resets.currentDiffersFromLast).toBe(1);
+    expect(report.resets.items[0]?.precedingOuterType).toBe("token_count");
+    expect(report.resets.items[0]?.precedingSemanticType).toBe("token_count");
+    expect(report.resets.items[0]?.resetCauseCandidate).toBe("unknown");
   });
 
   it("keeps a UTF-8 character intact when it crosses the 1 MiB chunk boundary", async () => {

@@ -1,6 +1,21 @@
 import { totalTokens, type TokenUsage } from "@lw-aiusage/core";
 import type { SourceAuditRecord, SourceUsageSummary, UsageRepository } from "@lw-aiusage/storage";
-import { auditCodexRaw, extractCodexFiles, replayCodexV4, snapshotCodexSource, stableHash, type CodexRawAuditReport, type ParserV4MirrorRecord } from "@lw-aiusage/collectors";
+import {
+  auditCodexForkHistory,
+  auditCodexPayloadUsageOverlap,
+  auditCodexRaw,
+  canonicalizeMirrorFiles,
+  extractCodexFiles,
+  replayCodexV4,
+  snapshotCodexSource,
+  stableHash,
+  summarizeCodexExtractedEvents,
+  type CodexEventTaxonomySummary,
+  type CodexForkHistoryAudit,
+  type CodexRawAuditReport,
+  type ParserV4MirrorRecord,
+  type PayloadUsageOverlapReport,
+} from "@lw-aiusage/collectors";
 import type { FileEntry, RuntimePlatform } from "@lw-aiusage/platform";
 
 export interface CodexRecordMismatchSummary {
@@ -23,13 +38,16 @@ export interface CodexRecordReconciliation {
 
 export interface CodexAccountingAuditReport {
   auditVersion: 3;
-  auditRevision: 3;
+  auditRevision: 4;
   parserVersion: 4;
   accounting: "codex-accounting-audit-v3";
   generatedAt: number;
   snapshotStable: boolean;
   snapshot: { beforeFingerprint: string; afterFingerprint: string };
   raw: CodexRawAuditReport;
+  eventTaxonomy: CodexEventTaxonomySummary;
+  forkHistory: CodexForkHistoryAudit;
+  payloadUsageOverlap: PayloadUsageOverlapReport;
   database: SourceUsageSummary;
   reconciliation: {
     mirrorUsage: TokenUsage;
@@ -99,6 +117,15 @@ export class CodexAccountingAuditService {
     const afterSnapshot = await snapshotCodexSource(this.platform);
     const database = await this.repository.getSourceUsageSummary("codex");
     const databaseRecords = await this.repository.getSourceAuditRecords("codex");
+    const canonicalExtracted = canonicalizeMirrorFiles(extracted);
+    const eventTaxonomy = summarizeCodexExtractedEvents(canonicalExtracted);
+    const forkHistory = auditCodexForkHistory(
+      mirror.forkTraces,
+      cursors.filter((cursor) => cursor.source === "codex"),
+      [...mirror.records.values()],
+      new Set(databaseRecords.map((record) => record.id)),
+    );
+    const payloadUsageOverlap = auditCodexPayloadUsageOverlap(extracted);
     const recordReconciliation = compareRecords([...mirror.records.values()], databaseRecords);
     const snapshotStable = beforeSnapshot.fingerprint === afterSnapshot.fingerprint && sameSummary(databaseBefore, database);
     const mirrorTokens = totalTokens(mirror.usage);
@@ -110,13 +137,16 @@ export class CodexAccountingAuditService {
     const sessionCountMatched = mirror.sessionCount === database.sessionCount;
     return {
       auditVersion: 3,
-      auditRevision: 3,
+      auditRevision: 4,
       parserVersion: 4,
       accounting: "codex-accounting-audit-v3",
       generatedAt: Date.now(),
       snapshotStable,
       snapshot: { beforeFingerprint: beforeSnapshot.fingerprint, afterFingerprint: afterSnapshot.fingerprint },
       raw,
+      eventTaxonomy,
+      forkHistory,
+      payloadUsageOverlap,
       database,
       reconciliation: {
         mirrorUsage: mirror.usage,

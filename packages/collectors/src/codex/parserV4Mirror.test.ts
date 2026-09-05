@@ -45,6 +45,7 @@ const event = (
   },
   eventIndex: index,
   eventType: "token_count",
+  isTokenCount: true,
   total: total === undefined ? undefined : counters(total),
   last: last === undefined ? undefined : counters(last),
   source: "token-count",
@@ -120,6 +121,7 @@ describe("Codex Parser v4 mirror", () => {
       raw,
       eventIndex: 0,
       eventType: "token_count",
+      isTokenCount: true,
       total: { input: 100, cachedInput: 80, cacheCreationInput: 0, output: 0, reasoningOutput: 4, total: 0 },
       source: "token-count",
     };
@@ -145,6 +147,7 @@ describe("Codex Parser v4 mirror", () => {
       },
       eventIndex: 0,
       eventType: "token_count",
+      isTokenCount: true,
       total: counters(0),
       source: "token-count",
     };
@@ -205,6 +208,7 @@ describe("Codex Parser v4 mirror", () => {
       raw,
       eventIndex: 0,
       eventType: "token_count",
+      isTokenCount: true,
       source: "token-count",
     }])]);
 
@@ -222,6 +226,7 @@ describe("Codex Parser v4 mirror", () => {
       raw: { type: "token_count", payload: { model: "gpt-5", info: { total_token_usage: { total_tokens: 500 } } } },
       eventIndex: 0,
       eventType: "token_count",
+      isTokenCount: true,
       source: "token-count",
     }])]);
 
@@ -235,7 +240,7 @@ describe("Codex Parser v4 mirror", () => {
         event("parent", 0, { model: "gpt-5", session_id: "parent" }, 1_000),
       ]),
       file("/fixture/.codex/sessions/z-child.jsonl", [
-        { raw: { type: "session_meta", payload: { id: "child", forked_from_id: "parent", model: "gpt-5" } }, eventIndex: 0, eventType: "session_meta" },
+        { raw: { type: "session_meta", payload: { id: "child", forked_from_id: "parent", model: "gpt-5" } }, eventIndex: 0, eventType: "session_meta", isTokenCount: false },
         event("child", 1, { model: "gpt-5", session_id: "child", forked_from_id: "parent" }, 1_200, 200),
       ]),
     ]);
