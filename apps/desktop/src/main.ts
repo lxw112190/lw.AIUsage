@@ -13,5 +13,14 @@ import "./stats.css";
 import "./theme.css";
 import "./welcome.css";
 
-const router = createRouter({ history: createWebHistory(), routes: [{ path: "/", component: Overview }, { path: "/usage", component: Usage }, { path: "/stats", component: Stats }, { path: "/agents", component: Agents }, { path: "/settings", component: Settings }] });
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    { path: "/", component: Overview },
+    { path: "/usage", component: Usage },
+    { path: "/stats", component: Stats },
+    { path: "/agents", component: Agents },
+    { path: "/settings", component: Settings },
+  ],
+});
 createApp(App).use(createPinia()).use(router).mount("#app");

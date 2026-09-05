@@ -1,38 +1,210 @@
-import type { UsageRecord } from "@lw-aiusage/core";
+import type { TokenUsage, UsageRecord } from "@lw-aiusage/core";
 import { zeroUsage } from "@lw-aiusage/core";
+import { objectValue, stableEventId, stringValue } from "../shared/identity";
 import type { UnknownCodexEvent, CodexParseContext } from "./types";
 
 const numberAt = (value: unknown, ...keys: string[]): number => {
   let current: unknown = value;
-  for (const key of keys) { if (typeof current !== "object" || current === null) return 0; current = (current as Record<string, unknown>)[key]; }
+  for (const key of keys) current = objectValue(current)?.[key];
   return typeof current === "number" && Number.isFinite(current) ? current : 0;
+};
+const firstNumber = (value: unknown, ...keys: string[]): number => {
+  for (const key of keys) {
+    const candidate = numberAt(value, key);
+    if (candidate !== 0 || objectValue(value)?.[key] === 0) return candidate;
+  }
+  return 0;
 };
 const stringAt = (value: unknown, ...keys: string[]): string | undefined => {
   let current: unknown = value;
-  for (const key of keys) { if (typeof current !== "object" || current === null) return undefined; current = (current as Record<string, unknown>)[key]; }
-  return typeof current === "string" ? current : undefined;
+  for (const key of keys) current = objectValue(current)?.[key];
+  return stringValue(current);
 };
-const timestampOf = (event: UnknownCodexEvent, fallback: number): number => { const value = event.timestamp; if (typeof value === "number") return value < 10_000_000_000 ? value * 1000 : value; if (typeof value === "string") { const parsed = Date.parse(value); if (Number.isFinite(parsed)) return parsed; } return fallback; };
+const firstString = (value: unknown, ...keys: string[]): string | undefined => {
+  for (const key of keys) {
+    const candidate = stringAt(value, key);
+    if (candidate) return candidate;
+  }
+  return undefined;
+};
+const timestampOf = (event: UnknownCodexEvent, fallback: number): number => {
+  if (typeof event.timestamp === "number")
+    return event.timestamp < 10_000_000_000
+      ? event.timestamp * 1000
+      : event.timestamp;
+  if (typeof event.timestamp === "string") {
+    const parsed = Date.parse(event.timestamp);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+};
+const hasUsageFields = (value: unknown): boolean => {
+  const object = objectValue(value);
+  return (
+    !!object &&
+    [
+      "input_tokens",
+      "inputTokens",
+      "cached_input_tokens",
+      "output_tokens",
+      "outputTokens",
+      "total_tokens",
+      "totalTokens",
+      "reasoning_output_tokens",
+    ].some((key) => key in object)
+  );
+};
 
-export function parseCodexEvent(event: UnknownCodexEvent, context: CodexParseContext, sourceId: string, lineIndex: number): { record?: UsageRecord; model?: string; sessionId?: string; projectKey?: string } {
-  const type = typeof event.type === "string" ? event.type : "";
-  const payload = event.payload ?? event;
-  const model = stringAt(payload, "model") ?? stringAt(event, "model") ?? context.currentModel;
-  const sessionId = stringAt(payload, "session_id") ?? stringAt(payload, "sessionId") ?? context.sessionId;
-  const projectKey = stringAt(payload, "cwd") ?? stringAt(payload, "project") ?? context.projectKey;
-  const usageNode = (typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).usage : undefined) ?? payload;
-  const hasUsage = typeof usageNode === "object" && usageNode !== null && ["input_tokens", "inputTokens", "output_tokens", "outputTokens", "total_tokens", "totalTokens", "reasoning_output_tokens"].some((key) => key in (usageNode as Record<string, unknown>));
-  const result: { record?: UsageRecord; model?: string; sessionId?: string; projectKey?: string } = { model, sessionId, projectKey };
-  if (!hasUsage || !model) return result;
+interface RawUsage {
+  input: number;
+  cachedInput: number;
+  cacheCreationInput: number;
+  output: number;
+  reasoningOutput: number;
+  total: number;
+}
+const rawUsageOf = (value: unknown): RawUsage => ({
+  input: firstNumber(value, "input_tokens", "inputTokens"),
+  cachedInput: firstNumber(value, "cached_input_tokens", "cachedInputTokens"),
+  cacheCreationInput: firstNumber(
+    value,
+    "cache_write_input_tokens",
+    "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
+  ),
+  output: firstNumber(value, "output_tokens", "outputTokens"),
+  reasoningOutput: firstNumber(
+    value,
+    "reasoning_output_tokens",
+    "reasoningOutputTokens",
+  ),
+  total: firstNumber(value, "total_tokens", "totalTokens"),
+});
+
+/** Codex reports input/output totals that include their cached/reasoning components. */
+const normalizeUsage = (raw: RawUsage): TokenUsage => {
   const usage = zeroUsage();
-  usage.inputTokens = numberAt(usageNode, "input_tokens") || numberAt(usageNode, "inputTokens");
-  usage.cachedInputTokens = numberAt(usageNode, "cached_input_tokens") || numberAt(usageNode, "cachedInputTokens");
-  usage.cacheCreationInputTokens = numberAt(usageNode, "cache_creation_input_tokens") || numberAt(usageNode, "cacheCreationInputTokens");
-  usage.outputTokens = numberAt(usageNode, "output_tokens") || numberAt(usageNode, "outputTokens");
-  usage.reasoningOutputTokens = numberAt(usageNode, "reasoning_output_tokens") || numberAt(usageNode, "reasoningOutputTokens");
-  const total = numberAt(usageNode, "total_tokens") || numberAt(usageNode, "totalTokens");
-  if (total && usage.inputTokens + usage.cachedInputTokens + usage.cacheCreationInputTokens + usage.outputTokens + usage.reasoningOutputTokens === 0) usage.inputTokens = total;
+  usage.cachedInputTokens = raw.cachedInput;
+  usage.cacheCreationInputTokens = raw.cacheCreationInput;
+  usage.inputTokens = Math.max(raw.input - raw.cachedInput, 0);
+  usage.reasoningOutputTokens = raw.reasoningOutput;
+  usage.outputTokens = Math.max(raw.output - raw.reasoningOutput, 0);
+  if (
+    raw.total > 0 &&
+    raw.input === 0 &&
+    raw.output === 0 &&
+    raw.reasoningOutput === 0 &&
+    raw.cachedInput === 0
+  )
+    usage.inputTokens = raw.total;
+  return usage;
+};
+const subtractUsage = (
+  current: TokenUsage,
+  previous: TokenUsage | undefined,
+): TokenUsage => {
+  if (!previous) return current;
+  return {
+    inputTokens: Math.max(current.inputTokens - previous.inputTokens, 0),
+    cachedInputTokens: Math.max(
+      current.cachedInputTokens - previous.cachedInputTokens,
+      0,
+    ),
+    cacheCreationInputTokens: Math.max(
+      current.cacheCreationInputTokens - previous.cacheCreationInputTokens,
+      0,
+    ),
+    outputTokens: Math.max(current.outputTokens - previous.outputTokens, 0),
+    reasoningOutputTokens: Math.max(
+      current.reasoningOutputTokens - previous.reasoningOutputTokens,
+      0,
+    ),
+  };
+};
+const hasTokens = (usage: TokenUsage): boolean =>
+  Object.values(usage).some((value) => value > 0);
+
+export interface CodexParseResult {
+  record?: UsageRecord;
+  model?: string;
+  sessionId?: string;
+  projectKey?: string;
+  state: CodexParseContext;
+}
+
+export function parseCodexEvent(
+  event: UnknownCodexEvent,
+  context: CodexParseContext,
+  sourceId: string,
+  _lineIndex: number,
+): CodexParseResult {
+  const payload = objectValue(event.payload) ?? event;
+  const info = objectValue(payload.info) ?? objectValue(event.info);
+  const lastNode = info?.last_token_usage ?? info?.lastTokenUsage;
+  const totalNode = info?.total_token_usage ?? info?.totalTokenUsage;
+  const model =
+    stringAt(payload, "model") ??
+    stringAt(event, "model") ??
+    context.currentModel;
+  const sessionId =
+    firstString(payload, "session_id", "sessionId") ??
+    firstString(event, "session_id", "sessionId") ??
+    context.sessionId;
+  const projectKey =
+    stringAt(payload, "cwd") ??
+    stringAt(payload, "project") ??
+    context.projectKey;
+  const state: CodexParseContext = {
+    sessionId,
+    projectKey,
+    currentModel: model,
+    previousTotalUsage: context.previousTotalUsage,
+  };
+  const flatUsageNode =
+    objectValue(payload.usage) ??
+    (hasUsageFields(payload) ? payload : undefined);
+  const usageNode = lastNode ?? totalNode ?? flatUsageNode;
+  if (!usageNode || !model || !hasUsageFields(usageNode))
+    return { model, sessionId, projectKey, state };
+
+  const normalizedTotal =
+    totalNode && hasUsageFields(totalNode)
+      ? normalizeUsage(rawUsageOf(totalNode))
+      : undefined;
+  if (normalizedTotal) state.previousTotalUsage = normalizedTotal;
+  const usage =
+    lastNode && hasUsageFields(lastNode)
+      ? normalizeUsage(rawUsageOf(lastNode))
+      : totalNode
+        ? subtractUsage(
+            normalizeUsage(rawUsageOf(usageNode)),
+            context.previousTotalUsage,
+          )
+        : normalizeUsage(rawUsageOf(usageNode));
+  if (!hasTokens(usage)) return { model, sessionId, projectKey, state };
+
   const timestamp = timestampOf(event, Date.now());
-  result.record = { id: `${sourceId}:${lineIndex}`, source: "codex", sessionId, timestamp, model, rawModel: model, projectKey: projectKey ?? "unknown", usage };
-  return result;
+  const recordId = stableEventId("codex", sourceId, event, {
+    timestamp: event.timestamp,
+    turnId: stringAt(payload, "turn_id", "turnId"),
+    responseId: stringAt(payload, "response_id", "responseId"),
+    total: totalNode ?? usageNode,
+  });
+  return {
+    model,
+    sessionId,
+    projectKey,
+    state,
+    record: {
+      id: recordId,
+      source: "codex",
+      sourcePath: sourceId,
+      sessionId,
+      timestamp,
+      model,
+      rawModel: model,
+      projectKey: projectKey ?? "unknown",
+      usage,
+    },
+  };
 }

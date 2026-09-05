@@ -1,1 +1,28 @@
-.welcome-card{display:flex;align-items:center;gap:16px;padding:19px 21px;background:linear-gradient(100deg,#f0edff,#fff);border:1px solid #ddd7ff;border-radius:14px}.welcome-card p{font-size:13px;color:#747b89;margin-top:5px}.welcome-icon{display:grid;place-items:center;flex:0 0 38px;height:38px;border-radius:11px;background:#6957e8;color:#fff;font-size:21px}.welcome-card .sync-button{margin-left:auto;white-space:nowrap}
+.welcome-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 19px 21px;
+  background: linear-gradient(100deg, #f0edff, #fff);
+  border: 1px solid #ddd7ff;
+  border-radius: 14px;
+}
+.welcome-card p {
+  font-size: 13px;
+  color: #747b89;
+  margin-top: 5px;
+}
+.welcome-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: #6957e8;
+  color: #fff;
+  font-size: 21px;
+}
+.welcome-card .sync-button {
+  margin-left: auto;
+  white-space: nowrap;
+}

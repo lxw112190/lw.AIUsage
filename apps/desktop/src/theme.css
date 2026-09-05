@@ -1,1 +1,78 @@
-[data-theme="dark"]{color-scheme:dark;--ink:#edf0f7;--muted:#a8afbd;--line:#303746;--card:#202632;background:#151922}[data-theme="dark"] body{background:#151922}[data-theme="dark"] .sidebar,[data-theme="dark"] .panel,[data-theme="dark"] .stat-card:not(.primary),[data-theme="dark"] .filter-panel,[data-theme="dark"] .filter-field input,[data-theme="dark"] .filter-field select,[data-theme="dark"] .clear-button,[data-theme="dark"] .theme-select,[data-theme="dark"] .setting-action{background:#202632;color:var(--ink)}[data-theme="dark"] nav a{color:#a8afbd}[data-theme="dark"] nav a.router-link-active{background:#302b59;color:#a99dff}[data-theme="dark"] th{background:#1b202a;color:#a8afbd}[data-theme="dark"] td{color:#c5cad5}[data-theme="dark"] .range-pill,[data-theme="dark"] .soon-badge{background:#2a303c;color:#a8afbd}[data-theme="dark"] .chart-panel{background:#202632}[data-theme="dark"] .chart-panel .empty-overlay,[data-theme="dark"] .empty-state{color:#a8afbd}[data-theme="dark"] .danger-row{border-color:#4a2d35}.danger-action{border:1px solid #e8a0a8;background:#fff5f6;color:#bc4d5b;height:35px;border-radius:7px;padding:0 12px;cursor:pointer;font-weight:700}.setting-action,.theme-select{height:35px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);padding:0 12px;font:inherit;font-size:12px;font-weight:700;cursor:pointer}.setting-action:disabled{opacity:.6}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #edf0f7;
+  --muted: #a8afbd;
+  --line: #303746;
+  --card: #202632;
+  background: #151922;
+}
+[data-theme="dark"] body {
+  background: #151922;
+}
+[data-theme="dark"] .sidebar,
+[data-theme="dark"] .panel,
+[data-theme="dark"] .stat-card:not(.primary),
+[data-theme="dark"] .filter-panel,
+[data-theme="dark"] .filter-field input,
+[data-theme="dark"] .filter-field select,
+[data-theme="dark"] .clear-button,
+[data-theme="dark"] .theme-select,
+[data-theme="dark"] .setting-action {
+  background: #202632;
+  color: var(--ink);
+}
+[data-theme="dark"] nav a {
+  color: #a8afbd;
+}
+[data-theme="dark"] nav a.router-link-active {
+  background: #302b59;
+  color: #a99dff;
+}
+[data-theme="dark"] th {
+  background: #1b202a;
+  color: #a8afbd;
+}
+[data-theme="dark"] td {
+  color: #c5cad5;
+}
+[data-theme="dark"] .range-pill,
+[data-theme="dark"] .soon-badge {
+  background: #2a303c;
+  color: #a8afbd;
+}
+[data-theme="dark"] .chart-panel {
+  background: #202632;
+}
+[data-theme="dark"] .chart-panel .empty-overlay,
+[data-theme="dark"] .empty-state {
+  color: #a8afbd;
+}
+[data-theme="dark"] .danger-row {
+  border-color: #4a2d35;
+}
+.danger-action {
+  border: 1px solid #e8a0a8;
+  background: #fff5f6;
+  color: #bc4d5b;
+  height: 35px;
+  border-radius: 7px;
+  padding: 0 12px;
+  cursor: pointer;
+  font-weight: 700;
+}
+.setting-action,
+.theme-select {
+  height: 35px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.setting-action:disabled {
+  opacity: 0.6;
+}

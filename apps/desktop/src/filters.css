@@ -1,1 +1,38 @@
-.filter-panel{display:flex;align-items:end;gap:13px;flex-wrap:wrap}.filter-field{display:grid;gap:6px}.filter-field label{font-size:11px;color:#8b92a0;font-weight:700;text-transform:uppercase;letter-spacing:.05em}.filter-field input,.filter-field select{height:35px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);padding:0 9px;font:inherit;font-size:12px}.clear-button{height:35px;border:1px solid var(--line);border-radius:7px;background:#fff;color:#697181;padding:0 12px;cursor:pointer;font-weight:650}
+.filter-panel {
+  display: flex;
+  align-items: end;
+  gap: 13px;
+  flex-wrap: wrap;
+}
+.filter-field {
+  display: grid;
+  gap: 6px;
+}
+.filter-field label {
+  font-size: 11px;
+  color: #8b92a0;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.filter-field input,
+.filter-field select {
+  height: 35px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 9px;
+  font: inherit;
+  font-size: 12px;
+}
+.clear-button {
+  height: 35px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: #697181;
+  padding: 0 12px;
+  cursor: pointer;
+  font-weight: 650;
+}

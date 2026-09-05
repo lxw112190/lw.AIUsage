@@ -1,6 +1,17 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "composite": true, "outDir": "dist", "rootDir": ".", "lib": ["ES2022", "DOM", "DOM.Iterable"] },
-  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/platform" }, { "path": "../../packages/storage" }, { "path": "../../packages/collectors" }, { "path": "../../packages/application" }],
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/platform" },
+    { "path": "../../packages/storage" },
+    { "path": "../../packages/collectors" },
+    { "path": "../../packages/application" }
+  ],
   "include": ["src"]
 }

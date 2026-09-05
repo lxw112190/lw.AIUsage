@@ -1,1 +1,17 @@
-.stats-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px}.compact-table{margin:18px -23px -23px;width:calc(100% + 46px)}.compact-table th,.compact-table td{padding:13px 16px}.compact-table td:last-child,.compact-table th:last-child{text-align:right}
+.stats-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+}
+.compact-table {
+  margin: 18px -23px -23px;
+  width: calc(100% + 46px);
+}
+.compact-table th,
+.compact-table td {
+  padding: 13px 16px;
+}
+.compact-table td:last-child,
+.compact-table th:last-child {
+  text-align: right;
+}

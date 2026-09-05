@@ -19,12 +19,22 @@ describe("detectCollectors", () => {
   });
 
   it("reports an absent agent as not detected", async () => {
-    const results = await detectCollectors(createFixturePlatform({}), defaultCollectors());
-    expect(results.every((result) => result.status === "NotDetected")).toBe(true);
+    const results = await detectCollectors(
+      createFixturePlatform({}),
+      defaultCollectors(),
+    );
+    expect(results.every((result) => result.status === "NotDetected")).toBe(
+      true,
+    );
   });
 
   it("reports an installed agent without usage files as ready", async () => {
-    const results = await detectCollectors(createFixturePlatform({ "/fixture/.codex/config.toml": "" }), defaultCollectors());
-    expect(results.find((result) => result.source === "codex")?.status).toBe("Ready");
+    const results = await detectCollectors(
+      createFixturePlatform({ "/fixture/.codex/config.toml": "" }),
+      defaultCollectors(),
+    );
+    expect(results.find((result) => result.source === "codex")?.status).toBe(
+      "Ready",
+    );
   });
 });

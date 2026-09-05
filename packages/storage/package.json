@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "dependencies": { "@lw-aiusage/core": "workspace:*", "dexie": "^4.0.11" },
-  "exports": { ".": "./src/index.ts" }
+  "dependencies": {
+    "@lw-aiusage/core": "workspace:*",
+    "dexie": "^4.0.11"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
 }

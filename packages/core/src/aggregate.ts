@@ -3,13 +3,19 @@ import { addUsage, totalTokens, zeroUsage } from "./models";
 
 export const BUCKET_MS = 30 * 60 * 1000;
 
-export const bucketStart = (timestamp: number): number => Math.floor(timestamp / BUCKET_MS) * BUCKET_MS;
+export const bucketStart = (timestamp: number): number =>
+  Math.floor(timestamp / BUCKET_MS) * BUCKET_MS;
 
 export function aggregateUsage(records: readonly UsageRecord[]): TokenUsage {
-  return records.reduce((sum, record) => addUsage(sum, record.usage), zeroUsage());
+  return records.reduce(
+    (sum, record) => addUsage(sum, record.usage),
+    zeroUsage(),
+  );
 }
 
-export function aggregateBuckets(records: readonly UsageRecord[]): UsageBucket[] {
+export function aggregateBuckets(
+  records: readonly UsageRecord[],
+): UsageBucket[] {
   const buckets = new Map<string, UsageBucket>();
   const sessions = new Map<string, Set<string>>();
   for (const record of records) {
@@ -39,12 +45,18 @@ export function aggregateBuckets(records: readonly UsageRecord[]): UsageBucket[]
   return [...buckets.values()].sort((a, b) => a.bucketStart - b.bucketStart);
 }
 
-export function estimatedCostUsd(usage: TokenUsage, pricing: ModelPricing): number {
+export function estimatedCostUsd(
+  usage: TokenUsage,
+  pricing: ModelPricing,
+): number {
   return (
     (usage.inputTokens / 1_000_000) * pricing.inputPerMillion +
-    (usage.cachedInputTokens / 1_000_000) * (pricing.cachedInputPerMillion ?? pricing.inputPerMillion) +
-    (usage.cacheCreationInputTokens / 1_000_000) * (pricing.cacheCreationPerMillion ?? pricing.inputPerMillion) +
-    ((usage.outputTokens + usage.reasoningOutputTokens) / 1_000_000) * pricing.outputPerMillion
+    (usage.cachedInputTokens / 1_000_000) *
+      (pricing.cachedInputPerMillion ?? pricing.inputPerMillion) +
+    (usage.cacheCreationInputTokens / 1_000_000) *
+      (pricing.cacheCreationPerMillion ?? pricing.inputPerMillion) +
+    ((usage.outputTokens + usage.reasoningOutputTokens) / 1_000_000) *
+      pricing.outputPerMillion
   );
 }
 
@@ -55,12 +67,26 @@ export interface ModelPricing {
   outputPerMillion: number;
 }
 
-export function normalizeModel(rawModel: string): { id: string; displayName: string; provider: string } {
+export function normalizeModel(rawModel: string): {
+  id: string;
+  displayName: string;
+  provider: string;
+} {
   const raw = rawModel.trim();
   const lower = raw.toLowerCase();
-  const provider = lower.includes("claude") ? "Anthropic" : lower.includes("gemini") ? "Google" : "OpenAI";
-  const displayName = raw.replace(/^model[-_]?/i, "").replace(/[-_]\d{8,}$/, "");
-  return { id: lower || "unknown", displayName: displayName || "Unknown model", provider };
+  const provider = lower.includes("claude")
+    ? "Anthropic"
+    : lower.includes("gemini")
+      ? "Google"
+      : "OpenAI";
+  const displayName = raw
+    .replace(/^model[-_]?/i, "")
+    .replace(/[-_]\d{8,}$/, "");
+  return {
+    id: lower || "unknown",
+    displayName: displayName || "Unknown model",
+    provider,
+  };
 }
 
 export { totalTokens };

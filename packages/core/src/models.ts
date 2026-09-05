@@ -8,9 +8,19 @@ export interface TokenUsage {
   reasoningOutputTokens: number;
 }
 
+/** State persisted alongside a file cursor so parsers can resume safely. */
+export interface UsageParserState {
+  sessionId?: string;
+  projectKey?: string;
+  currentModel?: string;
+  previousTotalUsage?: TokenUsage;
+}
+
 export interface UsageRecord {
   id: string;
   source: AgentSource;
+  /** Source file that produced this record; kept out of the UI by design. */
+  sourcePath?: string;
   sessionId?: string;
   timestamp: number;
   model: string;
@@ -59,9 +69,11 @@ export const zeroUsage = (): TokenUsage => ({
 export const addUsage = (left: TokenUsage, right: TokenUsage): TokenUsage => ({
   inputTokens: left.inputTokens + right.inputTokens,
   cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
-  cacheCreationInputTokens: left.cacheCreationInputTokens + right.cacheCreationInputTokens,
+  cacheCreationInputTokens:
+    left.cacheCreationInputTokens + right.cacheCreationInputTokens,
   outputTokens: left.outputTokens + right.outputTokens,
-  reasoningOutputTokens: left.reasoningOutputTokens + right.reasoningOutputTokens,
+  reasoningOutputTokens:
+    left.reasoningOutputTokens + right.reasoningOutputTokens,
 });
 
 export const totalTokens = (usage: TokenUsage): number =>

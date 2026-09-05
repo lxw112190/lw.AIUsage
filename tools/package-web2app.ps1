@@ -44,6 +44,7 @@ $pack = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
     '--product-name', 'lw.AIUsage',
     '--file-description', 'Local AI coding usage dashboard',
     '--icon', $iconPath,
+    '--external-links', 'browser',
     '--windowed',
     '--app-id', 'com.lw.aiusage',
     '--ipc',
@@ -52,7 +53,8 @@ $pack = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
     '--ipc-capability', 'fs.list',
     '--ipc-capability', 'fs.read',
     '--ipc-capability', 'fs.watch',
-    '--ipc-root', '${HOME}'
+    '--ipc-root', '${HOME}/.codex',
+    '--ipc-root', '${HOME}/.claude'
   )
 if ($pack.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $outputPath)) {
   throw "lw.Web2App packaging failed with exit code $($pack.ExitCode)"
