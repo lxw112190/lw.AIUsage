@@ -32,7 +32,7 @@ export class FixtureFileSystem implements FileSystemPort {
           isFile: true,
           isDirectory: false,
           size: new TextEncoder().encode(value).byteLength,
-          modifiedAt: Date.now(),
+          modifiedAt: 1,
         });
       else
         entries.set(entryPath, {
@@ -41,7 +41,7 @@ export class FixtureFileSystem implements FileSystemPort {
           isFile: false,
           isDirectory: true,
           size: 0,
-          modifiedAt: Date.now(),
+          modifiedAt: 1,
         });
     }
     return [...entries.values()];
@@ -51,7 +51,7 @@ export class FixtureFileSystem implements FileSystemPort {
     if (value === undefined) throw new Error(`Fixture file not found: ${path}`);
     return {
       size: new TextEncoder().encode(value).byteLength,
-      modifiedAt: Date.now(),
+      modifiedAt: 1,
       isFile: true,
     };
   }

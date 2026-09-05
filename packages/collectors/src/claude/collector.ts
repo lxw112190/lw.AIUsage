@@ -74,11 +74,13 @@ export class ClaudeCollector implements Collector {
         ),
       )
     ).flat();
-    return Promise.all(files.map(async (file) => {
+    const result: CollectorFile[] = [];
+    for (const file of files) {
       const cursor = context.cursors?.find((item) => item.source === this.source && item.path === file.path);
       const logicalId = cursor?.logicalId ?? cursor?.parserState?.sessionId ?? (await readClaudeSessionId(context.platform, file));
-      return logicalId ? { ...file, logicalId } : file;
-    }));
+      result.push(logicalId ? { ...file, logicalId } : file);
+    }
+    return result;
   }
   async scanFile(context: FileScanContext): Promise<FileScanResult> {
     const previous = context.cursor;

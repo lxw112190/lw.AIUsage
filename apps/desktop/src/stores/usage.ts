@@ -64,7 +64,7 @@ export const useUsageStore = defineStore("runtime", () => {
       });
   }
   async function rebuild(): Promise<void> {
-    if (syncing.value) return;
+    if (syncing.value || rawAuditBusy.value) return;
     syncing.value = true;
     error.value = undefined;
     try {
@@ -105,11 +105,37 @@ export const useUsageStore = defineStore("runtime", () => {
     }
   }
   async function resetLocalData(): Promise<void> {
-    await repository.resetStatistics();
-    dataRevision.value += 1;
+    if (syncing.value || rawAuditBusy.value) return;
+    syncing.value = true;
+    error.value = undefined;
+    const wasWatching = !!watchHandle;
+    try {
+      if (watchHandle) {
+        await watchHandle.close();
+        watchHandle = undefined;
+      }
+      await manager.waitForIdle();
+      await repository.resetStatistics();
+      rebuildAudit.value = undefined;
+      auditReport.value = undefined;
+      rawAuditReport.value = undefined;
+      codexAccountingAuditReport.value = undefined;
+      dataRevision.value += 1;
+      diagnostics.add("INFO", "Local usage data reset complete");
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : "Reset failed";
+      diagnostics.add("ERROR", error.value, "reset");
+      throw cause;
+    } finally {
+      if (wasWatching && !watchHandle) {
+        try { await startWatch(); }
+        catch (cause) { diagnostics.add("ERROR", cause instanceof Error ? cause.message : "Unable to restart watcher", "watch"); }
+      }
+      syncing.value = false;
+    }
   }
   async function sync(): Promise<void> {
-    if (syncing.value) return;
+    if (syncing.value || rawAuditBusy.value) return;
     syncing.value = true;
     error.value = undefined;
     diagnostics.add("INFO", "Usage sync started");
@@ -154,19 +180,24 @@ export const useUsageStore = defineStore("runtime", () => {
     URL.revokeObjectURL(url);
   }
   async function runCodexRawAudit(): Promise<void> {
-    if (rawAuditBusy.value) return;
+    if (rawAuditBusy.value || syncing.value) return;
     rawAuditBusy.value = true;
     rawAuditProgress.value = { current: 0, total: 0 };
     const wasWatching = !!watchHandle;
-    const revisionBefore = dataRevision.value;
     try {
       if (watchHandle) {
         await watchHandle.close();
         watchHandle = undefined;
       }
-      const report = await new CodexAccountingAuditService(platform, repository).audit((current, total) => {
+      const report = await new CodexAccountingAuditService(platform, repository, async () => {
+        const syncResult = await manager.sync();
+        if (syncResult.inserted > 0) {
+          dataRevision.value += 1;
+          lastSync.value = Date.now();
+        }
+      }).audit((current, total) => {
         rawAuditProgress.value = { current, total };
-      }, revisionBefore === dataRevision.value);
+      });
       codexAccountingAuditReport.value = report;
       rawAuditReport.value = report.raw;
       const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });

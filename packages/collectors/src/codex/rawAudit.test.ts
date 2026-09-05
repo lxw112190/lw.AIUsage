@@ -98,10 +98,10 @@ describe("Codex raw audit", () => {
     const platform = createFixturePlatform({
       "/fixture/.codex/sessions/sources.jsonl": [
         JSON.stringify({ type: "session_meta", payload: { id: "sources" } }),
-        JSON.stringify({ type: "token_count", payload: { info: { last_token_usage: { input_tokens: 10 } } } }),
-        JSON.stringify({ type: "turn_context", payload: { info: { last_token_usage: { input_tokens: 20 } } } }),
-        JSON.stringify({ type: "response.completed", payload: { usage: { input_tokens: 30 } } }),
-        JSON.stringify({ type: "response.completed", payload: { input_tokens: 40 } }),
+        JSON.stringify({ type: "token_count", payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 10 } } } }),
+        JSON.stringify({ type: "turn_context", payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 20 } } } }),
+        JSON.stringify({ type: "response.completed", payload: { model: "gpt-5", usage: { input_tokens: 30 } } }),
+        JSON.stringify({ type: "response.completed", payload: { model: "gpt-5", input_tokens: 40 } }),
       ].join("\n") + "\n",
     });
     const report = await auditCodexRaw(platform);

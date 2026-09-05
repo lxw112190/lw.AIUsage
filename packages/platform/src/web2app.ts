@@ -72,6 +72,14 @@ function entryOf(value: NativeEntry): FileEntry | undefined {
 }
 
 export class Web2AppFileSystem implements FileSystemPort {
+  private readQueue: Promise<void> = Promise.resolve();
+
+  private enqueueRead<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.readQueue.then(operation, operation);
+    this.readQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
   async exists(path: string): Promise<boolean> {
     const result = await invoke<{ exists?: unknown }>("fs.exists", { path });
     return result.exists === true;
@@ -102,6 +110,14 @@ export class Web2AppFileSystem implements FileSystemPort {
   }
 
   async readRange(
+    path: string,
+    start: number,
+    end?: number,
+  ): Promise<ArrayBuffer> {
+    return this.enqueueRead(() => this.readRangeInternal(path, start, end));
+  }
+
+  private async readRangeInternal(
     path: string,
     start: number,
     end?: number,

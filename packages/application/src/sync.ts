@@ -38,6 +38,9 @@ export class SyncManager {
       if (this.activeSync === operation) this.activeSync = undefined;
     }
   }
+  async waitForIdle(): Promise<void> {
+    await this.activeSync;
+  }
   private async syncInternal(
     onProgress?: (progress: CollectorProgress) => void,
   ): Promise<SyncResult> {

@@ -31,7 +31,11 @@ async function rebuild(): Promise<void> {
 }
 async function resetData(): Promise<void> {
   if (!window.confirm(t("confirm.reset"))) return;
-  await usage.resetLocalData();
+  try {
+    await usage.resetLocalData();
+  } catch (cause) {
+    usage.recordError(cause instanceof Error ? cause.message : "Reset failed");
+  }
 }
 async function generateAudit(): Promise<void> {
   auditBusy.value = true;

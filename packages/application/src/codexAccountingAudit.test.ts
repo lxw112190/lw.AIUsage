@@ -6,7 +6,7 @@ import { CodexAccountingAuditService } from "./codexAccountingAudit";
 describe("Codex accounting audit", () => {
   it("reconciles the raw v4-equivalent with stored Codex records", async () => {
     const platform = createFixturePlatform({
-      "/fixture/.codex/sessions/a.jsonl": `${JSON.stringify({ type: "token_count", payload: { info: { last_token_usage: { input_tokens: 12 } } } })}\n`,
+      "/fixture/.codex/sessions/a.jsonl": `${JSON.stringify({ type: "token_count", payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 12 } } } })}\n`,
     });
     const repository = new MemoryUsageRepository();
     const service = new CodexAccountingAuditService(platform, repository);

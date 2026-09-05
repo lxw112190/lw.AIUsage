@@ -86,11 +86,13 @@ export class CodexCollector implements Collector {
         ),
       )
     ).flat().sort((left, right) => left.path.localeCompare(right.path));
-    return Promise.all(files.map(async (file) => {
+    const result: CollectorFile[] = [];
+    for (const file of files) {
       const cursor = context.cursors?.find((item) => item.source === this.source && item.path === file.path);
       const logicalId = cursor?.logicalId ?? cursor?.parserState?.sessionId ?? (await readCodexSessionMeta(context.platform, file)).sessionId;
-      return logicalId ? { ...file, logicalId } : file;
-    }));
+      result.push(logicalId ? { ...file, logicalId } : file);
+    }
+    return result;
   }
 
   async scanFile(context: FileScanContext): Promise<FileScanResult> {

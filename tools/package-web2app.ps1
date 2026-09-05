@@ -1,12 +1,16 @@
 param(
   [Alias('Web2ExeRoot')]
-  [string]$Web2AppRoot
+  [string]$Web2AppRoot,
+  [string]$OutputPath
 )
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $sourceDirectory = Join-Path $projectRoot 'apps\desktop\dist'
 $artifactDirectory = Join-Path $projectRoot 'artifacts'
-$outputPath = Join-Path $artifactDirectory 'lw.AIUsage.exe'
+$outputPath = if ($OutputPath) {
+  if ([IO.Path]::IsPathRooted($OutputPath)) { $OutputPath }
+  else { Join-Path $projectRoot $OutputPath }
+} else { Join-Path $artifactDirectory 'lw.AIUsage.exe' }
 $iconPath = Join-Path $projectRoot 'assets\lw-aiusage-icon.ico'
 
 if (-not $Web2AppRoot) {
