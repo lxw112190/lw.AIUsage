@@ -43,6 +43,9 @@ describe("Codex fork history audit", () => {
     expect(report.unexplainedMirrorOnlyRecords).toBe(0);
     expect(report.explainedTokens).toBe(200);
     expect(report.items[0]?.explainsMirrorOnly).toBe(true);
+    expect(report.items[0]?.outcome).toBe("full-replay-only");
+    expect(report.forkMirrorOnlyInvariant).toBe(true);
+    expect(report.forkMirrorOnlyExplainedPercent).toBe(100);
     expect(report.items[0]?.childSessionHash).not.toBe("child");
   });
 
@@ -71,5 +74,37 @@ describe("Codex fork history audit", () => {
     expect(report.baselineDifferent).toBe(1);
     expect(report.items[0]?.baselineDifferenceNetTokens).toBe(0);
     expect(report.items[0]?.baselineDifferenceMagnitudeTokens).toBe(200);
+  });
+
+  it("reports fork-local and global mirror-only explanation rates separately", () => {
+    const trace: V4ForkTrace = {
+      childSessionId: "child",
+      parentSessionId: "parent",
+      firstUsageEventId: "fork-one",
+      baselineUsed: usage(1_000),
+      firstTotal: usage(1_200),
+      firstContribution: usage(200),
+    };
+    const mirrorRecords = [
+      record("fork-one", "child", 200),
+      record("fork-two", "child", 50),
+      record("other-one", "other", 20),
+      record("other-two", "other", 20),
+      record("other-three", "other", 20),
+    ];
+    const report = auditCodexForkHistory(
+      [trace],
+      [{ parserState: { sessionId: "child", forkedFromSessionId: "parent", forkBaselineUsage: usage(1_200) } }],
+      mirrorRecords,
+      { mirrorOnlyIds: new Set(mirrorRecords.map((item) => item.id)), databaseOnlyIds: new Set(), contentMismatchIds: new Set() },
+    );
+
+    expect(report.globalMirrorOnlyRecords).toBe(5);
+    expect(report.forkMirrorOnlyRecords).toBe(2);
+    expect(report.explainedMirrorOnlyRecords).toBe(1);
+    expect(report.forkMirrorOnlyExplainedPercent).toBe(50);
+    expect(report.globalMirrorOnlyExplainedPercent).toBe(20);
+    expect(report.allGlobalMirrorOnlyExplainedByFork).toBe(false);
+    expect(report.forkMirrorOnlyInvariant).toBe(true);
   });
 });

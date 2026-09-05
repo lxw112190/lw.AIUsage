@@ -8,6 +8,7 @@ export type CodexForkOutcome =
   | "both-same"
   | "both-different"
   | "neither"
+  | "database-state-inconsistent"
   | "unresolved";
 
 export interface CodexForkHistoryAuditItem {
@@ -40,9 +41,14 @@ export interface CodexForkHistoryAudit {
   baselineDifferent: number;
   explainedMirrorOnlyRecords: number;
   unexplainedMirrorOnlyRecords: number;
+  globalMirrorOnlyRecords: number;
+  forkMirrorOnlyRecords: number;
+  unexplainedForkMirrorOnlyRecords: number;
   explainedTokens: number;
   forkMirrorOnlyInvariant: boolean;
+  forkMirrorOnlyExplainedPercent: number;
   globalMirrorOnlyExplainedPercent: number;
+  allGlobalMirrorOnlyExplainedByFork: boolean;
   items: CodexForkHistoryAuditItem[];
 }
 
@@ -101,7 +107,7 @@ function outcomeOf(
   const persistedEmitsRecord = hasTokens(persistedContribution);
   const fullReplayEmitsRecord = hasTokens(fullReplayContribution);
   if (fullReplayEmitsRecord && !persistedEmitsRecord && contentMismatchIds.has(firstReplayRecord.id))
-    return "both-different";
+    return "database-state-inconsistent";
   if (fullReplayEmitsRecord && !persistedEmitsRecord) return "full-replay-only";
   if (!fullReplayEmitsRecord && persistedEmitsRecord) return "persisted-only";
   if (persistedEmitsRecord && fullReplayEmitsRecord)
@@ -209,6 +215,7 @@ export function auditCodexForkHistory(
   }
   const forkMirrorOnlyRecordCount = forkMirrorOnlyIds.size;
   const unexplainedMirrorOnlyRecords = [...forkMirrorOnlyIds].filter((id) => !explainedMirrorOnlyIds.has(id)).length;
+  const globalMirrorOnlyRecords = recordDiff.mirrorOnlyIds.size;
   return {
     forkSessions: childIds.size,
     persistedBaselineAvailable,
@@ -217,11 +224,18 @@ export function auditCodexForkHistory(
     baselineDifferent,
     explainedMirrorOnlyRecords,
     unexplainedMirrorOnlyRecords,
+    globalMirrorOnlyRecords,
+    forkMirrorOnlyRecords: forkMirrorOnlyRecordCount,
+    unexplainedForkMirrorOnlyRecords: unexplainedMirrorOnlyRecords,
     explainedTokens,
     forkMirrorOnlyInvariant: explainedMirrorOnlyRecords + unexplainedMirrorOnlyRecords === forkMirrorOnlyRecordCount,
-    globalMirrorOnlyExplainedPercent: forkMirrorOnlyRecordCount
+    forkMirrorOnlyExplainedPercent: forkMirrorOnlyRecordCount
       ? (explainedMirrorOnlyRecords / forkMirrorOnlyRecordCount) * 100
       : 100,
+    globalMirrorOnlyExplainedPercent: globalMirrorOnlyRecords
+      ? (explainedMirrorOnlyRecords / globalMirrorOnlyRecords) * 100
+      : 100,
+    allGlobalMirrorOnlyExplainedByFork: globalMirrorOnlyRecords === explainedMirrorOnlyRecords,
     items,
   };
 }

@@ -34,6 +34,16 @@ const totalToken = (index: number, timestamp: number, input: number): CodexExtra
   resolvedSessionId: "session",
   source: "token-count",
 });
+const shadowedPayload = (index: number, timestamp: number, input: number): CodexExtractedEvent => ({
+  raw: { type: "token_count", timestamp, payload: { model: "gpt-5", usage: counters(input), info: { last_token_usage: counters(input) } } },
+  eventIndex: index,
+  eventType: "token_count",
+  semanticType: "token_count",
+  isTokenCount: true,
+  resolvedModel: "gpt-5",
+  resolvedSessionId: "session",
+  source: "token-count",
+});
 const file = (events: CodexExtractedEvent[]): CodexExtractedFile => ({ entry: entry("/fixture/session.jsonl"), snapshotSize: 1, finalSessionId: "session", events });
 
 describe("Codex payload usage overlap", () => {
@@ -67,8 +77,8 @@ describe("Codex payload usage overlap", () => {
     expect(report.linkSummary.weak.events).toBe(1);
     expect(report.byEvidence["same-total-near-time"]?.events).toBe(1);
     expect(report.payloadTokenInvariant).toBe(true);
-    expect(report.payloadTokens).toBe(10 + 20 + 30 + 40 + 20 + 50 + 60);
-    expect(report.payloadTokens).toBe(
+    expect(report.payloadUniverse.parserV4Eligible.tokens).toBe(10 + 20 + 30 + 40 + 20 + 50 + 60);
+    expect(report.payloadUniverse.parserV4Eligible.tokens).toBe(
       Object.values(report.duplicateClassification).reduce((sum, count) => sum + count.tokens, 0),
     );
   });
@@ -84,4 +94,51 @@ describe("Codex payload usage overlap", () => {
     expect(refs.map((ref) => ref.usage.inputTokens)).toEqual([100, 50, 0, 50]);
     expect(refs.map((ref) => ref.hasTokenContribution)).toEqual([true, true, false, true]);
   });
+
+  it("separates observed payload usage from parser-v4-eligible payload usage", () => {
+    const report = auditCodexPayloadUsageOverlap([file([
+      shadowedPayload(0, 1_700_000_000_000, 100),
+      payload(1, 1_700_000_001_000, 50),
+    ])]);
+
+    expect(report.payloadUniverse.observed).toEqual({ events: 2, tokens: 150 });
+    expect(report.payloadUniverse.parserV4Eligible).toEqual({ events: 1, tokens: 50 });
+    expect(report.payloadUniverse.shadowedByHigherPriority).toEqual({ events: 1, tokens: 100 });
+    expect(report.payloadUniverseEventInvariant).toBe(true);
+    expect(report.payloadUniverseTokenInvariant).toBe(true);
+  });
+
+  it("is independent of payload order and lets strong evidence win first", () => {
+    const token = tokenCountWithResponse("r-strong");
+    const weak = payload(1, 1_700_000_000_500, 100);
+    const strong = payload(2, 1_700_000_000_500, 100, { response_id: "r-strong" });
+    const first = auditCodexPayloadUsageOverlap([file([token, weak, strong])]);
+    const second = auditCodexPayloadUsageOverlap([file([token, strong, weak])]);
+
+    expect(first.duplicateClassification.confirmed).toEqual({ events: 1, tokens: 100 });
+    expect(first.duplicateClassification.unmatched).toEqual({ events: 1, tokens: 100 });
+    expect(first.linkedTokens).toBe(100);
+    expect(first.candidateLinkedTokens).toBe(100);
+    expect(first.samples).toEqual(second.samples);
+    expect(first.duplicateClassification).toEqual(second.duplicateClassification);
+  });
+
+  it("requires mutual uniqueness and narrows response candidates by usage", () => {
+    const ambiguous = auditCodexPayloadUsageOverlap([file([
+      tokenCountWithResponse("r-many"),
+      payload(1, 1_700_000_000_000, 100, { response_id: "r-many" }),
+      payload(2, 1_700_000_000_001, 100, { response_id: "r-many" }),
+    ])]);
+    expect(ambiguous.duplicateClassification.ambiguous.events).toBe(2);
+
+    const narrowed = auditCodexPayloadUsageOverlap([file([
+      token(0, 1_700_000_000_000, 10, { response_id: "r-narrow" }),
+      token(1, 1_700_000_000_001, 100, { response_id: "r-narrow" }),
+      payload(2, 1_700_000_000_002, 100, { response_id: "r-narrow" }),
+    ])]);
+    expect(narrowed.duplicateClassification.confirmed.events).toBe(1);
+    expect(narrowed.duplicateClassification.confirmed.tokens).toBe(100);
+  });
 });
+
+const tokenCountWithResponse = (responseId: string): CodexExtractedEvent => token(0, 1_700_000_000_000, 100, { response_id: responseId });

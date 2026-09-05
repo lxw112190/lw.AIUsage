@@ -5,7 +5,6 @@ import {
   normalizeRawCounters,
   positiveRawDelta,
   rawCountersFrom,
-  sameRawCounters,
   type CodexRawCounters,
   zeroRawCounters,
 } from "./accounting";
@@ -43,6 +42,17 @@ export type PayloadDuplicateClass =
   | "ambiguous"
   | "unmatched";
 
+export interface UsageCount {
+  events: number;
+  tokens: number;
+}
+
+export interface PayloadUsageUniverse {
+  observed: UsageCount;
+  parserV4Eligible: UsageCount;
+  shadowedByHigherPriority: UsageCount;
+}
+
 export interface CodexUsageEventRef {
   stableId: string;
   sessionId: string;
@@ -55,6 +65,7 @@ export interface CodexUsageEventRef {
   usage: TokenUsage;
   rawCounters?: CodexRawCounters;
   hasTokenContribution: boolean;
+  parserV4Eligible: boolean;
 }
 
 export interface PayloadUsageMatch {
@@ -70,7 +81,8 @@ export interface PayloadUsageMatch {
 export interface PayloadOverlapDay {
   day: string;
   tokenCountTokens: number;
-  payloadTokens: number;
+  observedPayloadTokens: number;
+  eligiblePayloadTokens: number;
   confirmedDuplicateTokens: number;
   probableDuplicateTokens: number;
   possibleDuplicateTokens: number;
@@ -93,25 +105,24 @@ export interface PayloadOverlapSample {
   tokenCountTokens?: number;
 }
 
-interface OverlapCount {
-  events: number;
-  tokens: number;
-}
-
 export interface PayloadOverlapModel {
   model: string;
   payloadEvents: number;
   payloadTokens: number;
   confirmedDuplicateTokens: number;
   probableDuplicateTokens: number;
+  possibleDuplicateTokens: number;
+  linkedDifferentUsageTokens: number;
+  weakCandidateTokens: number;
+  ambiguousTokens: number;
   unmatchedTokens: number;
 }
 
+interface OverlapCount extends UsageCount {}
+
 export interface PayloadUsageOverlapReport {
-  payloadEvents: number;
-  payloadTokens: number;
-  tokenCountEvents: number;
-  tokenCountTokens: number;
+  payloadUniverse: PayloadUsageUniverse;
+  tokenCount: UsageCount;
   duplicateClassification: {
     confirmed: OverlapCount;
     probable: OverlapCount;
@@ -136,19 +147,18 @@ export interface PayloadUsageOverlapReport {
   samples: PayloadOverlapSample[];
   confirmedDuplicateTokens: number;
   linkedTokens: number;
-  uniqueOrUnresolvedPayloadTokens: number;
+  candidateLinkedTokens: number;
+  notConfirmedDuplicateTokens: number;
+  payloadUniverseEventInvariant: boolean;
+  payloadUniverseTokenInvariant: boolean;
   payloadTokenInvariant: boolean;
   payloadEventInvariant: boolean;
   payloadClassificationInvariant: boolean;
 }
 
 const evidenceValues: PayloadLinkEvidence[] = [
-  "same-response-id",
-  "same-turn-id",
-  "exact-usage-near-time",
-  "exact-usage-wide-time",
-  "same-total-near-time",
-  "none",
+  "same-response-id", "same-turn-id", "exact-usage-near-time",
+  "exact-usage-wide-time", "same-total-near-time", "none",
 ];
 const dayFieldOf: Record<PayloadDuplicateClass, keyof PayloadOverlapDay> = {
   confirmed: "confirmedDuplicateTokens",
@@ -202,12 +212,7 @@ const usageNodesOf = (event: CodexExtractedEvent): {
   const info = objectValue(payload.info) ?? objectValue(msg?.info) ?? objectValue(event.raw.info);
   const lastNode = info?.last_token_usage ?? info?.lastTokenUsage;
   const totalNode = info?.total_token_usage ?? info?.totalTokenUsage;
-  return {
-    lastNode,
-    totalNode,
-    last: rawCountersWithPresence(lastNode),
-    total: rawCountersWithPresence(totalNode),
-  };
+  return { lastNode, totalNode, last: rawCountersWithPresence(lastNode), total: rawCountersWithPresence(totalNode) };
 };
 
 const refOf = (
@@ -216,6 +221,7 @@ const refOf = (
   source: "token-count" | "payload-usage",
   rawNode: unknown,
   rawCounters: CodexRawCounters | undefined,
+  parserV4Eligible: boolean,
 ): CodexUsageEventRef | undefined => {
   if (!rawCounters) return undefined;
   const payload = payloadOf(event);
@@ -229,6 +235,7 @@ const refOf = (
     responseId,
     total: rawNode,
   });
+  const usage = normalizeRawCounters(rawCounters);
   return {
     stableId,
     sessionId,
@@ -238,12 +245,14 @@ const refOf = (
     model: event.resolvedModel,
     semanticType: event.semanticType,
     source,
-    usage: normalizeRawCounters(rawCounters),
+    usage,
     rawCounters: cloneRaw(rawCounters),
-    hasTokenContribution: source === "payload-usage" || totalTokens(normalizeRawCounters(rawCounters)) > 0,
+    hasTokenContribution: totalTokens(usage) > 0,
+    parserV4Eligible,
   };
 };
 
+/** Derives TokenCount contributions for overlap diagnostics only; it is not Parser v5 accounting. */
 export function collectTokenCountRefs(files: readonly CodexExtractedFile[]): CodexUsageEventRef[] {
   const refs: CodexUsageEventRef[] = [];
   const previousBySession = new Map<string, CodexRawCounters>();
@@ -264,8 +273,7 @@ export function collectTokenCountRefs(files: readonly CodexExtractedFile[]): Cod
         previousBySession.set(sessionId, cloneRaw(nodes.total));
       }
       if (nodes.last) contribution = cloneRaw(nodes.last);
-      const rawNode = nodes.lastNode ?? nodes.totalNode;
-      const ref = refOf(file, event, "token-count", rawNode, contribution);
+      const ref = refOf(file, event, "token-count", nodes.lastNode ?? nodes.totalNode, contribution, true);
       if (ref) {
         ref.hasTokenContribution = totalTokens(ref.usage) > 0;
         refs.push(ref);
@@ -285,7 +293,7 @@ export function collectCodexUsageEventRefs(files: readonly CodexExtractedFile[])
     for (const event of file.events) {
       const payload = payloadOf(event);
       const payloadNode = objectValue(payload.usage);
-      const payloadRef = refOf(file, event, "payload-usage", payloadNode, rawCountersWithPresence(payloadNode));
+      const payloadRef = refOf(file, event, "payload-usage", payloadNode, rawCountersWithPresence(payloadNode), event.source === "payload-usage");
       if (payloadRef) payloadUsage.push(payloadRef);
     }
   }
@@ -298,26 +306,22 @@ const sameUsageExact = (left: TokenUsage, right: TokenUsage): boolean =>
   left.cacheCreationInputTokens === right.cacheCreationInputTokens &&
   left.outputTokens === right.outputTokens &&
   left.reasoningOutputTokens === right.reasoningOutputTokens;
-
 const usageRelation = (payload: TokenUsage, token: TokenUsage | undefined): PayloadUsageRelation => {
   if (!token) return "unknown";
   if (sameUsageExact(payload, token)) return "same-components";
   if (totalTokens(payload) === totalTokens(token)) return "same-total-different-components";
   return "different";
 };
-
 const timeDelta = (left: CodexUsageEventRef, right: CodexUsageEventRef): number | undefined =>
   left.timestamp === undefined || right.timestamp === undefined ? undefined : Math.abs(left.timestamp - right.timestamp);
-const within = (left: CodexUsageEventRef, right: CodexUsageEventRef, limit: number): boolean => {
+const within = (left: CodexUsageEventRef, right: CodexUsageEventRef, limit: number, minimum = -1): boolean => {
   const delta = timeDelta(left, right);
-  return delta !== undefined && delta <= limit;
+  return delta !== undefined && delta > minimum && delta <= limit;
 };
+const compareRef = (left: CodexUsageEventRef, right: CodexUsageEventRef): number =>
+  (left.timestamp ?? 0) - (right.timestamp ?? 0) || left.stableId.localeCompare(right.stableId);
 
-function duplicateClassOf(
-  evidence: PayloadLinkEvidence,
-  confidence: PayloadLinkConfidence,
-  relation: PayloadUsageRelation,
-): PayloadDuplicateClass {
+function duplicateClassOf(confidence: PayloadLinkConfidence, evidence: PayloadLinkEvidence, relation: PayloadUsageRelation): PayloadDuplicateClass {
   if (confidence === "ambiguous") return "ambiguous";
   if (confidence === "unmatched") return "unmatched";
   if (confidence === "weak") return "weak-candidate";
@@ -328,97 +332,140 @@ function duplicateClassOf(
   return "linked-different-usage";
 }
 
+interface MatchPass {
+  evidence: PayloadLinkEvidence;
+  confidence: PayloadLinkConfidence;
+  candidate: (payload: CodexUsageEventRef, token: CodexUsageEventRef) => boolean;
+  narrow?: (payload: CodexUsageEventRef, tokens: CodexUsageEventRef[]) => CodexUsageEventRef[];
+}
+
+interface PayloadMatchState {
+  payloads: readonly CodexUsageEventRef[];
+  tokens: readonly CodexUsageEventRef[];
+  matches: Map<number, PayloadUsageMatch>;
+  usedPayloads: Set<number>;
+  usedTokens: Set<number>;
+  ambiguousEvidence: Map<number, { evidence: PayloadLinkEvidence; confidence: PayloadLinkConfidence }>;
+}
+
+const confidenceRank: Record<PayloadLinkConfidence, number> = {
+  exact: 6, probable: 5, possible: 4, weak: 3, ambiguous: 2, unmatched: 1,
+};
+const recordAmbiguous = (state: PayloadMatchState, index: number, pass: MatchPass): void => {
+  const current = state.ambiguousEvidence.get(index);
+  if (!current || confidenceRank[pass.confidence] > confidenceRank[current.confidence])
+    state.ambiguousEvidence.set(index, { evidence: pass.evidence, confidence: pass.confidence });
+};
+const acceptMatch = (state: PayloadMatchState, payloadIndex: number, tokenIndex: number, pass: MatchPass): void => {
+  const payload = state.payloads[payloadIndex]!;
+  const token = state.tokens[tokenIndex]!;
+  const relation = usageRelation(payload.usage, token.usage);
+  state.matches.set(payloadIndex, {
+    payload,
+    tokenCount: token,
+    evidence: pass.evidence,
+    linkConfidence: pass.confidence,
+    usageRelation: relation,
+    duplicateClass: duplicateClassOf(pass.confidence, pass.evidence, relation),
+    timeDeltaMs: timeDelta(payload, token),
+  });
+  state.usedPayloads.add(payloadIndex);
+  state.usedTokens.add(tokenIndex);
+};
+
+function runMatchPass(state: PayloadMatchState, pass: MatchPass): void {
+  const payloadCandidates = new Map<number, number[]>();
+  const tokenCandidates = new Map<number, number[]>();
+  for (let payloadIndex = 0; payloadIndex < state.payloads.length; payloadIndex += 1) {
+    if (state.usedPayloads.has(payloadIndex)) continue;
+    const payload = state.payloads[payloadIndex]!;
+    const candidateTokens = state.tokens
+      .map((token, tokenIndex) => ({ token, tokenIndex }))
+      .filter(({ token, tokenIndex }) => !state.usedTokens.has(tokenIndex) && token.sessionId === payload.sessionId && pass.candidate(payload, token));
+    const narrowed = pass.narrow?.(payload, candidateTokens.map(({ token }) => token)) ?? candidateTokens.map(({ token }) => token);
+    const candidateIndexes = narrowed
+      .map((token) => state.tokens.indexOf(token))
+      .filter((tokenIndex) => tokenIndex >= 0 && !state.usedTokens.has(tokenIndex));
+    if (candidateIndexes.length) payloadCandidates.set(payloadIndex, candidateIndexes);
+  }
+  for (const [payloadIndex, tokenIndexes] of payloadCandidates) {
+    for (const tokenIndex of tokenIndexes) {
+      const values = tokenCandidates.get(tokenIndex) ?? [];
+      values.push(payloadIndex);
+      tokenCandidates.set(tokenIndex, values);
+    }
+  }
+  for (const [payloadIndex, tokenIndexes] of payloadCandidates) {
+    if (tokenIndexes.length === 1 && tokenCandidates.get(tokenIndexes[0]!)?.length === 1) {
+      acceptMatch(state, payloadIndex, tokenIndexes[0]!, pass);
+    } else {
+      recordAmbiguous(state, payloadIndex, pass);
+      for (const tokenIndex of tokenIndexes)
+        if ((tokenCandidates.get(tokenIndex)?.length ?? 0) > 1)
+          for (const otherPayload of tokenCandidates.get(tokenIndex)!) recordAmbiguous(state, otherPayload, pass);
+    }
+  }
+}
+
 const dayOf = (timestamp?: number): string | undefined => {
   if (timestamp === undefined) return undefined;
   const date = new Date(timestamp);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 };
 
-export function auditCodexPayloadUsageOverlap(
-  files: readonly CodexExtractedFile[],
-): PayloadUsageOverlapReport {
+/** All duplicate/link classifications below use parserV4Eligible payload.usage events only. */
+export function auditCodexPayloadUsageOverlap(files: readonly CodexExtractedFile[]): PayloadUsageOverlapReport {
   const refs = collectCodexUsageEventRefs(files);
-  const tokenUsed = new Set<number>();
-  const matches = new Map<number, PayloadUsageMatch>();
-  const candidates = (payload: CodexUsageEventRef, predicate: (token: CodexUsageEventRef) => boolean): number[] =>
-    refs.tokenCount
-      .map((token, index) => ({ token, index }))
-      .filter(({ token, index }) => !tokenUsed.has(index) && token.sessionId === payload.sessionId && predicate(token))
-      .map(({ index }) => index);
-  const selectUnique = (payload: CodexUsageEventRef, values: number[]): number | undefined => {
-    if (values.length !== 1) return undefined;
-    return values[0];
+  const observed = refs.payloadUsage.reduce((count, ref) => ({ events: count.events + 1, tokens: count.tokens + totalTokens(ref.usage) }), emptyCount());
+  const eligiblePayloads = refs.payloadUsage.filter((ref) => ref.parserV4Eligible).sort(compareRef);
+  const tokens = [...refs.tokenCount].sort(compareRef);
+  const eligible = eligiblePayloads.reduce((count, ref) => ({ events: count.events + 1, tokens: count.tokens + totalTokens(ref.usage) }), emptyCount());
+  const payloadMatchState: PayloadMatchState = { payloads: eligiblePayloads, tokens, matches: new Map(), usedPayloads: new Set(), usedTokens: new Set(), ambiguousEvidence: new Map() };
+  const exactComponentNarrow = (payload: CodexUsageEventRef, candidates: CodexUsageEventRef[]): CodexUsageEventRef[] => {
+    const same = candidates.filter((token) => sameUsageExact(payload.usage, token.usage));
+    return same.length === 1 ? same : candidates;
   };
-  const addMatch = (
-    payloadIndex: number,
-    payload: CodexUsageEventRef,
-    tokenIndex: number | undefined,
-    evidence: PayloadLinkEvidence,
-    confidence: PayloadLinkConfidence,
-  ): void => {
-    const token = tokenIndex === undefined ? undefined : refs.tokenCount[tokenIndex];
-    const relation = usageRelation(payload.usage, token?.usage);
-    matches.set(payloadIndex, {
+  runMatchPass(payloadMatchState, {
+    evidence: "same-response-id",
+    confidence: "exact",
+    candidate: (payload, token) => !!payload.responseId && payload.responseId === token.responseId,
+    narrow: exactComponentNarrow,
+  });
+  runMatchPass(payloadMatchState, {
+    evidence: "same-turn-id",
+    confidence: "probable",
+    candidate: (payload, token) => !!payload.turnId && payload.turnId === token.turnId,
+    narrow: exactComponentNarrow,
+  });
+  runMatchPass(payloadMatchState, {
+    evidence: "exact-usage-near-time",
+    confidence: "probable",
+    candidate: (payload, token) => token.hasTokenContribution && sameUsageExact(payload.usage, token.usage) && within(payload, token, 1_000),
+  });
+  runMatchPass(payloadMatchState, {
+    evidence: "exact-usage-wide-time",
+    confidence: "possible",
+    candidate: (payload, token) => token.hasTokenContribution && sameUsageExact(payload.usage, token.usage) && within(payload, token, 10_000, 1_000),
+  });
+  runMatchPass(payloadMatchState, {
+    evidence: "same-total-near-time",
+    confidence: "weak",
+    candidate: (payload, token) => token.hasTokenContribution && !sameUsageExact(payload.usage, token.usage) && totalTokens(payload.usage) === totalTokens(token.usage) && within(payload, token, 10_000),
+  });
+  for (let payloadIndex = 0; payloadIndex < eligiblePayloads.length; payloadIndex += 1) {
+    if (payloadMatchState.matches.has(payloadIndex)) continue;
+    const ambiguous = payloadMatchState.ambiguousEvidence.get(payloadIndex);
+    const payload = eligiblePayloads[payloadIndex]!;
+    const evidence = ambiguous?.evidence ?? "none";
+    const confidence = ambiguous?.confidence === "weak" ? "weak" : ambiguous ? "ambiguous" : "unmatched";
+    const relation = confidence === "weak" ? "same-total-different-components" : "unknown";
+    payloadMatchState.matches.set(payloadIndex, {
       payload,
-      tokenCount: token,
       evidence,
       linkConfidence: confidence,
       usageRelation: relation,
-      duplicateClass: duplicateClassOf(evidence, confidence, relation),
-      timeDeltaMs: token ? timeDelta(payload, token) : undefined,
+      duplicateClass: duplicateClassOf(confidence, evidence, relation),
     });
-    if (tokenIndex !== undefined) tokenUsed.add(tokenIndex);
-  };
-  for (const [payloadIndex, payload] of refs.payloadUsage.entries()) {
-    const responseCandidates = payload.responseId
-      ? candidates(payload, (token) => token.responseId === payload.responseId)
-      : [];
-    if (responseCandidates.length > 1) {
-      addMatch(payloadIndex, payload, undefined, "same-response-id", "ambiguous");
-      continue;
-    }
-    if (responseCandidates.length === 1) {
-      addMatch(payloadIndex, payload, responseCandidates[0], "same-response-id", "exact");
-      continue;
-    }
-    const turnCandidates = payload.turnId
-      ? candidates(payload, (token) => token.turnId === payload.turnId)
-      : [];
-    if (turnCandidates.length > 1) {
-      addMatch(payloadIndex, payload, undefined, "same-turn-id", "ambiguous");
-      continue;
-    }
-    if (turnCandidates.length === 1) {
-      addMatch(payloadIndex, payload, turnCandidates[0], "same-turn-id", "probable");
-      continue;
-    }
-    const nearCandidates = candidates(payload, (token) => token.hasTokenContribution && sameUsageExact(payload.usage, token.usage) && within(payload, token, 1_000));
-    if (nearCandidates.length > 1) {
-      addMatch(payloadIndex, payload, undefined, "exact-usage-near-time", "ambiguous");
-      continue;
-    }
-    const nearIndex = selectUnique(payload, nearCandidates);
-    if (nearIndex !== undefined) {
-      addMatch(payloadIndex, payload, nearIndex, "exact-usage-near-time", "probable");
-      continue;
-    }
-    const wideCandidates = candidates(payload, (token) => token.hasTokenContribution && sameUsageExact(payload.usage, token.usage) && within(payload, token, 10_000));
-    if (wideCandidates.length > 1) {
-      addMatch(payloadIndex, payload, undefined, "exact-usage-wide-time", "ambiguous");
-      continue;
-    }
-    const wideIndex = selectUnique(payload, wideCandidates);
-    if (wideIndex !== undefined) {
-      addMatch(payloadIndex, payload, wideIndex, "exact-usage-wide-time", "possible");
-      continue;
-    }
-    const weakCandidates = candidates(payload, (token) => token.hasTokenContribution && totalTokens(payload.usage) === totalTokens(token.usage) && within(payload, token, 10_000));
-    if (weakCandidates.length > 1) {
-      addMatch(payloadIndex, payload, undefined, "same-total-near-time", "ambiguous");
-      continue;
-    }
-    const weakIndex = selectUnique(payload, weakCandidates);
-    addMatch(payloadIndex, payload, weakIndex, weakIndex === undefined ? "none" : "same-total-near-time", weakIndex === undefined ? "unmatched" : "weak");
   }
 
   const duplicateClassification = {
@@ -430,96 +477,90 @@ export function auditCodexPayloadUsageOverlap(
   const bySemanticType: Record<string, OverlapCount> = {};
   const byModel = new Map<string, PayloadOverlapModel>();
   const days = new Map<string, PayloadOverlapDay>();
-  const samples: PayloadOverlapSample[] = [];
-  for (let index = 0; index < refs.payloadUsage.length; index += 1) {
-    const payload = refs.payloadUsage[index]!;
-    const match = matches.get(index) ?? {
-      payload,
-      evidence: "none" as const,
-      linkConfidence: "unmatched" as const,
-      usageRelation: "unknown" as const,
-      duplicateClass: "unmatched" as const,
-    };
-    const tokens = totalTokens(payload.usage);
-    const duplicateKey = (match.duplicateClass === "linked-different-usage"
-      ? "linkedDifferentUsage"
-      : match.duplicateClass === "weak-candidate"
-        ? "weakCandidate"
-        : match.duplicateClass) as keyof typeof duplicateClassification;
-    const duplicateCount = duplicateClassification[duplicateKey];
-    duplicateCount.events += 1;
-    duplicateCount.tokens += tokens;
-    const linkCount = linkSummary[match.linkConfidence];
-    linkCount.events += 1;
-    linkCount.tokens += tokens;
+  const matches = [...payloadMatchState.matches.values()].sort((left, right) => compareRef(left.payload, right.payload));
+  for (const match of matches) {
+    const tokensForPayload = totalTokens(match.payload.usage);
+    const duplicateKey = (match.duplicateClass === "linked-different-usage" ? "linkedDifferentUsage" : match.duplicateClass === "weak-candidate" ? "weakCandidate" : match.duplicateClass) as keyof typeof duplicateClassification;
+    duplicateClassification[duplicateKey].events += 1;
+    duplicateClassification[duplicateKey].tokens += tokensForPayload;
+    linkSummary[match.linkConfidence].events += 1;
+    linkSummary[match.linkConfidence].tokens += tokensForPayload;
     byEvidence[match.evidence].events += 1;
-    byEvidence[match.evidence].tokens += tokens;
-    const semantic = payload.semanticType ?? "unknown";
+    byEvidence[match.evidence].tokens += tokensForPayload;
+    const semantic = match.payload.semanticType ?? "unknown";
     const semanticCount = bySemanticType[semantic] ?? emptyCount();
     semanticCount.events += 1;
-    semanticCount.tokens += tokens;
+    semanticCount.tokens += tokensForPayload;
     bySemanticType[semantic] = semanticCount;
-    const model = payload.model ?? "unknown";
-    const modelCount = byModel.get(model) ?? { model, payloadEvents: 0, payloadTokens: 0, confirmedDuplicateTokens: 0, probableDuplicateTokens: 0, unmatchedTokens: 0 };
+    const model = match.payload.model ?? "unknown";
+    const modelCount = byModel.get(model) ?? { model, payloadEvents: 0, payloadTokens: 0, confirmedDuplicateTokens: 0, probableDuplicateTokens: 0, possibleDuplicateTokens: 0, linkedDifferentUsageTokens: 0, weakCandidateTokens: 0, ambiguousTokens: 0, unmatchedTokens: 0 };
     modelCount.payloadEvents += 1;
-    modelCount.payloadTokens += tokens;
-    if (match.duplicateClass === "confirmed") modelCount.confirmedDuplicateTokens += tokens;
-    if (match.duplicateClass === "probable") modelCount.probableDuplicateTokens += tokens;
-    if (match.duplicateClass === "unmatched") modelCount.unmatchedTokens += tokens;
+    modelCount.payloadTokens += tokensForPayload;
+    const modelField = dayFieldOf[match.duplicateClass];
+    (modelCount as unknown as Record<string, number>)[modelField] = ((modelCount as unknown as Record<string, number>)[modelField] ?? 0) + tokensForPayload;
     byModel.set(model, modelCount);
-    const day = dayOf(payload.timestamp);
+    const day = dayOf(match.payload.timestamp);
     if (day) {
-      const daySummary = days.get(day) ?? { day, tokenCountTokens: 0, payloadTokens: 0, confirmedDuplicateTokens: 0, probableDuplicateTokens: 0, possibleDuplicateTokens: 0, linkedDifferentUsageTokens: 0, weakCandidateTokens: 0, ambiguousTokens: 0, unmatchedTokens: 0 };
-      daySummary.payloadTokens += tokens;
+      const daySummary = days.get(day) ?? { day, tokenCountTokens: 0, observedPayloadTokens: 0, eligiblePayloadTokens: 0, confirmedDuplicateTokens: 0, probableDuplicateTokens: 0, possibleDuplicateTokens: 0, linkedDifferentUsageTokens: 0, weakCandidateTokens: 0, ambiguousTokens: 0, unmatchedTokens: 0 };
+      daySummary.eligiblePayloadTokens += tokensForPayload;
       const field = dayFieldOf[match.duplicateClass];
       const dayValues = daySummary as unknown as Record<string, number>;
-      dayValues[field] = (dayValues[field] ?? 0) + tokens;
+      dayValues[field] = (dayValues[field] ?? 0) + tokensForPayload;
       days.set(day, daySummary);
     }
-    if (samples.length < 20) samples.push({
-      sessionHash: stableHash(payload.sessionId),
-      payloadRecordHash: stableHash(payload.stableId),
+  }
+  for (const ref of refs.payloadUsage) {
+    const day = dayOf(ref.timestamp);
+    if (!day) continue;
+    const daySummary = days.get(day) ?? { day, tokenCountTokens: 0, observedPayloadTokens: 0, eligiblePayloadTokens: 0, confirmedDuplicateTokens: 0, probableDuplicateTokens: 0, possibleDuplicateTokens: 0, linkedDifferentUsageTokens: 0, weakCandidateTokens: 0, ambiguousTokens: 0, unmatchedTokens: 0 };
+    daySummary.observedPayloadTokens += totalTokens(ref.usage);
+    days.set(day, daySummary);
+  }
+  for (const token of tokens) {
+    const day = dayOf(token.timestamp);
+    if (!day) continue;
+    const daySummary = days.get(day) ?? { day, tokenCountTokens: 0, observedPayloadTokens: 0, eligiblePayloadTokens: 0, confirmedDuplicateTokens: 0, probableDuplicateTokens: 0, possibleDuplicateTokens: 0, linkedDifferentUsageTokens: 0, weakCandidateTokens: 0, ambiguousTokens: 0, unmatchedTokens: 0 };
+    daySummary.tokenCountTokens += totalTokens(token.usage);
+    days.set(day, daySummary);
+  }
+  const classifiedTokens = Object.values(duplicateClassification).reduce((sum, count) => sum + count.tokens, 0);
+  const classifiedEvents = Object.values(duplicateClassification).reduce((sum, count) => sum + count.events, 0);
+  const linkedTokens = linkSummary.exact.tokens + linkSummary.probable.tokens + linkSummary.possible.tokens;
+  const candidateLinkedTokens = linkedTokens + linkSummary.weak.tokens + linkSummary.ambiguous.tokens;
+  const tokenCount = { events: tokens.length, tokens: tokens.reduce((sum, ref) => sum + totalTokens(ref.usage), 0) };
+  return {
+    payloadUniverse: {
+      observed,
+      parserV4Eligible: eligible,
+      shadowedByHigherPriority: { events: observed.events - eligible.events, tokens: observed.tokens - eligible.tokens },
+    },
+    tokenCount,
+    duplicateClassification,
+    linkSummary,
+    byEvidence,
+    bySemanticType,
+    byModel: [...byModel.values()].sort((left, right) => right.payloadTokens - left.payloadTokens),
+    peakDays: [...days.values()].sort((left, right) => right.eligiblePayloadTokens - left.eligiblePayloadTokens).slice(0, 20),
+    samples: matches.slice(0, 20).map((match) => ({
+      sessionHash: stableHash(match.payload.sessionId),
+      payloadRecordHash: stableHash(match.payload.stableId),
       tokenCountRecordHash: match.tokenCount ? stableHash(match.tokenCount.stableId) : undefined,
       evidence: match.evidence,
       linkConfidence: match.linkConfidence,
       usageRelation: match.usageRelation,
       duplicateClass: match.duplicateClass,
       timeDeltaMs: match.timeDeltaMs,
-      payloadTokens: tokens,
+      payloadTokens: totalTokens(match.payload.usage),
       tokenCountTokens: match.tokenCount ? totalTokens(match.tokenCount.usage) : undefined,
-    });
-  }
-  for (const token of refs.tokenCount) {
-    const day = dayOf(token.timestamp);
-    if (!day) continue;
-    const daySummary = days.get(day) ?? { day, tokenCountTokens: 0, payloadTokens: 0, confirmedDuplicateTokens: 0, probableDuplicateTokens: 0, possibleDuplicateTokens: 0, linkedDifferentUsageTokens: 0, weakCandidateTokens: 0, ambiguousTokens: 0, unmatchedTokens: 0 };
-    daySummary.tokenCountTokens += totalTokens(token.usage);
-    days.set(day, daySummary);
-  }
-  const payloadTokens = refs.payloadUsage.reduce((sum, ref) => sum + totalTokens(ref.usage), 0);
-  const classifiedTokens = Object.values(duplicateClassification).reduce((sum, count) => sum + count.tokens, 0);
-  const classifiedEvents = Object.values(duplicateClassification).reduce((sum, count) => sum + count.events, 0);
-  const linkedTokens = Object.entries(linkSummary)
-    .filter(([confidence]) => confidence !== "unmatched")
-    .reduce((sum, [, count]) => sum + count.tokens, 0);
-  const confirmedDuplicateTokens = duplicateClassification.confirmed.tokens;
-  return {
-    payloadEvents: refs.payloadUsage.length,
-    payloadTokens,
-    tokenCountEvents: refs.tokenCount.length,
-    tokenCountTokens: refs.tokenCount.reduce((sum, ref) => sum + totalTokens(ref.usage), 0),
-    duplicateClassification,
-    linkSummary,
-    byEvidence,
-    bySemanticType,
-    byModel: [...byModel.values()].sort((left, right) => right.payloadTokens - left.payloadTokens),
-    peakDays: [...days.values()].sort((left, right) => right.payloadTokens - left.payloadTokens).slice(0, 20),
-    samples,
-    confirmedDuplicateTokens,
+    })),
+    confirmedDuplicateTokens: duplicateClassification.confirmed.tokens,
     linkedTokens,
-    uniqueOrUnresolvedPayloadTokens: payloadTokens - confirmedDuplicateTokens,
-    payloadTokenInvariant: payloadTokens === classifiedTokens,
-    payloadEventInvariant: classifiedEvents === refs.payloadUsage.length,
-    payloadClassificationInvariant: classifiedTokens === payloadTokens,
+    candidateLinkedTokens,
+    notConfirmedDuplicateTokens: eligible.tokens - duplicateClassification.confirmed.tokens,
+    payloadUniverseEventInvariant: observed.events === eligible.events + observed.events - eligible.events,
+    payloadUniverseTokenInvariant: observed.tokens === eligible.tokens + observed.tokens - eligible.tokens,
+    payloadTokenInvariant: eligible.tokens === classifiedTokens,
+    payloadEventInvariant: eligible.events === classifiedEvents,
+    payloadClassificationInvariant: eligible.tokens === classifiedTokens,
   };
 }
