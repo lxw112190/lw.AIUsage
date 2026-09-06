@@ -190,6 +190,19 @@ async function runRawAudit(): Promise<void> {
             {{ reasonLabel(item.reason) }}: {{ formatTokens(item.delta) }} Token / {{ item.events.toLocaleString() }}
           </span>
         </div>
+        <h3 class="audit-subheading">{{ t("settings.v5Diagnostics") }}</h3>
+        <div class="audit-summary">
+          <span>{{ t("settings.v5ParseErrors") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.source.filesWithParseErrors.toLocaleString() }} / {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.source.parseErrorCount.toLocaleString() }}</strong>
+          <span>{{ t("settings.v5SessionConflicts") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.decode.sessionIdentityConflicts.toLocaleString() }} / {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.decode.parentIdentityConflicts.toLocaleString() }}</strong>
+          <span>{{ t("settings.v5LogicalConflicts") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.reconcile.conflictingLogicalSessions.toLocaleString() }}</strong>
+          <span>{{ t("settings.v5RawDuplicateGroups") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.rawContentDuplicates.groups.toLocaleString() }}</strong>
+          <span>{{ t("settings.v5RawDuplicateOccurrences") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.rawContentDuplicates.duplicateOccurrences.toLocaleString() }}</strong>
+          <span>{{ t("settings.v5RawDuplicateTokens") }}</span><strong>{{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.rawContentDuplicates.candidateExtraTokens) }} Token</strong>
+          <span>{{ t("settings.v5DuplicateV5Only") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.rawContentDuplicates.v5OnlyOccurrences.toLocaleString() }} / {{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.rawContentDuplicates.v5OnlyTokens) }} Token</strong>
+          <span>{{ t("settings.v5DuplicateUnexplained") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.rawContentDuplicates.unexplainedOccurrences.toLocaleString() }} / {{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.rawContentDuplicates.unexplainedTokens) }} Token</strong>
+          <span>{{ t("settings.v5ReplayMismatch") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.forkReplay.replayPrefixMismatchSessions.toLocaleString() }}</strong>
+          <span>{{ t("settings.v5MissingParent") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.forkBaseline.missingParentSessions.toLocaleString() }}</strong>
+        </div>
       </div>
       <div class="setting-row">
         <div>

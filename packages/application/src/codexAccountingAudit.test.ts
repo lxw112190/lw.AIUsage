@@ -12,7 +12,7 @@ describe("Codex accounting audit", () => {
     const service = new CodexAccountingAuditService(platform, repository);
     const report = await service.audit();
     expect(report.auditVersion).toBe(3);
-    expect(report.auditRevision).toBe(9);
+    expect(report.auditRevision).toBe(10);
     expect(report.snapshot.sourceStable).toBe(true);
     expect(report.snapshot.databaseStable).toBe(true);
     expect(report.snapshot.auditStable).toBe(true);

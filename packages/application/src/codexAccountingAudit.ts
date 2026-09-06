@@ -46,7 +46,7 @@ export interface CodexRecordReconciliation {
 
 export interface CodexAccountingAuditReport {
   auditVersion: 3;
-  auditRevision: 9;
+  auditRevision: 10;
   parserVersion: 4;
   accounting: "codex-accounting-audit-v3";
   generatedAt: number;
@@ -177,7 +177,7 @@ export class CodexAccountingAuditService {
     const sessionCountMatched = mirror.sessionCount === database.sessionCount;
     return {
       auditVersion: 3,
-      auditRevision: 9,
+      auditRevision: 10,
       parserVersion: 4,
       accounting: "codex-accounting-audit-v3",
       generatedAt: Date.now(),

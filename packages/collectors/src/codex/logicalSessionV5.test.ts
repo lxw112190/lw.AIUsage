@@ -65,6 +65,11 @@ describe("Codex v5 logical session reconciliation", () => {
 
     expect(result.sessions).toHaveLength(0);
     expect(result.conflicts[0]).toMatchObject({ sessionId: "s", reason: "divergent-events" });
+    expect(result.diagnostics.conflicts).toEqual([expect.objectContaining({
+      sessionId: "s",
+      reason: "divergent-events",
+      sourcePaths: expect.arrayContaining(["/sessions/a.jsonl", "/archived_sessions/a.jsonl"]),
+    })]);
     expect(result.diagnostics.conflictingLogicalSessions).toBe(1);
   });
 

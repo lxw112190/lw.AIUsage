@@ -49,6 +49,7 @@ describe("Codex v4-v5 accounting comparator", () => {
       tokenEvent(1, 110, 20, "b"),
     ])]);
 
+    expect(result.comparatorVersion).toBe(2);
     expect(result.v4.totalTokens).toBe(30);
     expect(result.v5.canonicalTokens).toBe(30);
     expect(result.difference.accountingTokens).toBe(0);
@@ -334,5 +335,35 @@ describe("Codex v4-v5 accounting comparator", () => {
     expect(second.difference).toEqual(first.difference);
     expect(second.attribution).toEqual(first.attribution);
     expect(second.comparisonEntries).toEqual(first.comparisonEntries);
+  });
+
+  it("exports safe logical conflict evidence without decoded file payloads", () => {
+    const first = file("/sessions/a.jsonl", [tokenEvent(0, 100, 10, "a")], "session");
+    const second = file("/sessions/b.jsonl", [tokenEvent(0, 100, 20, "a")], "session");
+    const result = compareCodexV4V5([first, second]);
+
+    expect(result.conflicts).toEqual([expect.objectContaining({
+      sessionId: "session",
+      reason: "divergent-events",
+      sourcePaths: ["/sessions/a.jsonl", "/sessions/b.jsonl"],
+    })]);
+    expect(result.v5.diagnostics.reconcile.conflicts).toEqual(result.conflicts);
+    expect(result.v5.diagnostics.reconcile.conflicts[0]).not.toHaveProperty("files");
+  });
+
+  it("reports exact raw-content duplicate evidence separately from v5 accounting", () => {
+    const first = { ...tokenEvent(0, 100, 10, "same"), last: { input: 10, cachedInput: 0, cacheCreationInput: 0, output: 0, reasoningOutput: 0, total: 10 } };
+    const second = { ...tokenEvent(1, 100, 10, "same"), last: { input: 10, cachedInput: 0, cacheCreationInput: 0, output: 0, reasoningOutput: 0, total: 10 } };
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [first, second])]);
+
+    expect(result.rawContentDuplicates.groups).toBe(1);
+    expect(result.rawContentDuplicates.duplicateOccurrences).toBe(1);
+    expect(result.rawContentDuplicates.candidateExtraTokens).toBe(10);
+    expect(result.rawContentDuplicates.examples[0]).toMatchObject({
+      sessionId: "session",
+      occurrences: 2,
+      eventIndexes: [0, 1],
+      aggregateTokens: 10,
+    });
   });
 });

@@ -1,14 +1,16 @@
 import { totalTokens, zeroUsage, type TokenUsage } from "@lw-aiusage/core";
 import { objectValue, stableEventId, stringValue, stableHash } from "../shared/identity";
+import { rawCounterTotal } from "./accounting";
 import type { CodexExtractedEvent, CodexExtractedFile, CodexUsageSource } from "./rawAuditTypes";
 import { replayCodexV4 } from "./parserV4Mirror";
 import { decodeCodexFileV5, stableCodexEventJsonV5, type CodexParsedFileInputV5 } from "./eventDecoderV5";
 import { parseCodexFilesV5, type CodexV5ParseResult, type CodexV5SessionParseResult } from "./parserV5";
 import { resolveForkBaselinesV5, resolveForkReplayV5, type CanonicalUsageContributionV5, type ForkBaselineResolutionV5, type ForkReplaySuppressionV5 } from "./forkReplayV5";
-import { reconcileCodexLogicalSessionsV5, type CodexLogicalSessionReconcileResultV5 } from "./logicalSessionV5";
+import { reconcileCodexLogicalSessionsV5, type CodexLogicalSessionConflictSummaryV5, type CodexLogicalSessionReconcileResultV5 } from "./logicalSessionV5";
 import { deriveTokenCountContribution, type CodexAccountingEvent } from "./accountingV5";
 import { payloadUsageCandidateOf, resolvePayloadFallbackV5, type PayloadSuppression } from "./payloadFallbackV5";
 import type { ParserV4MirrorRecord } from "./rawAuditTypes";
+import type { CodexV5ParserDiagnostics } from "./parserV5";
 
 export interface CodexComparisonEventIdentity {
   sessionId: string;
@@ -116,6 +118,57 @@ export interface CodexComparisonUniverse {
   v4RecordMapping: CodexV4MappingDiagnostics;
 }
 
+export interface CodexRawContentDuplicateGroupV5 {
+  sessionId: string;
+  rawContentFingerprint: string;
+  occurrences: number;
+  eventIndexes: number[];
+  timestamp?: number;
+  /** Tokens represented by one occurrence, using the extracted per-event usage. */
+  aggregateTokens: number;
+  sourcePaths: string[];
+  v5OnlyOccurrences: number;
+  v5OnlyTokens: number;
+  unexplainedOccurrences: number;
+  unexplainedTokens: number;
+}
+
+export interface CodexRawContentDuplicateSummaryV5 {
+  groups: number;
+  duplicateOccurrences: number;
+  candidateExtraTokens: number;
+  v5OnlyOccurrences: number;
+  v5OnlyTokens: number;
+  unexplainedOccurrences: number;
+  unexplainedTokens: number;
+  examples: CodexRawContentDuplicateGroupV5[];
+}
+
+export interface CodexV5DiagnosticsSummary {
+  source: Pick<CodexV5ParserDiagnostics["source"], "filesWithParseErrors" | "parseErrorCount" | "filesWithPendingText">;
+  decode: Pick<CodexV5ParserDiagnostics["decode"], "sessionIdentityConflicts" | "parentIdentityConflicts">;
+  reconcile: Pick<CodexV5ParserDiagnostics["reconcile"], "logicalSessions" | "exactDuplicateFiles" | "prefixShadowedFiles" | "conflictingLogicalSessions" | "orphanFiles"> & {
+    conflicts: CodexLogicalSessionConflictSummaryV5[];
+  };
+  tokenCount: {
+    observedEvents: number;
+    exactRawDuplicateEvents: number;
+    canonicalEvents: number;
+    canonicalTokens: number;
+    unresolved: number;
+    counterResets: number;
+    incomparable: number;
+  };
+  forkBaseline: Pick<CodexV5ParserDiagnostics["forkBaseline"],
+    "forkSessions" | "missingParentSessions" | "missingForkTimestampSessions" |
+    "missingParentCheckpointSessions" | "missingChildTotalTimestampSessions" |
+    "incomparableBaselineSessions" | "cycleSessions" | "conflictingParentSessions">;
+  forkReplay: Pick<CodexV5ParserDiagnostics["forkReplay"], "replayPrefixMismatchSessions" | "partialReplayBlockedEvents" | "missingReplayIdentityEvents">;
+  projection: Pick<CodexV5ParserDiagnostics["projection"], "missingTimestampContributions" | "missingTimestampTokens">;
+  invariants: CodexV5ParserDiagnostics["invariants"];
+  activation: CodexV5ParserDiagnostics["activation"];
+}
+
 export interface CodexV4V5ComparisonGates {
   sourceIntegrity: boolean;
   universeComparable: boolean;
@@ -127,7 +180,7 @@ export interface CodexV4V5ComparisonGates {
 }
 
 export interface CodexV4V5ComparisonReport {
-  comparatorVersion: 1;
+  comparatorVersion: 2;
   snapshot: { files: number };
   universe: CodexComparisonUniverse;
   v4: {
@@ -143,7 +196,10 @@ export interface CodexV4V5ComparisonReport {
     canonicalTokens: number;
     emittedTokens: number;
     safeToActivate: boolean;
+    diagnostics: CodexV5DiagnosticsSummary;
   };
+  conflicts: CodexLogicalSessionConflictSummaryV5[];
+  rawContentDuplicates: CodexRawContentDuplicateSummaryV5;
   difference: {
     components: SignedTokenUsage;
     accountingTokens: number;
@@ -216,6 +272,139 @@ const signedNonZero = (usage: SignedTokenUsage): boolean => Object.values(usage)
 
 const eventSessionId = (file: CodexExtractedFile, event: CodexExtractedEvent): string =>
   file.finalSessionId ?? file.peekLogicalId ?? event.resolvedSessionId ?? "unknown";
+
+const rawUsageOf = (event: CodexExtractedEvent): number =>
+  rawCounterTotal(event.last ?? event.flat ?? event.total ?? {
+    input: 0,
+    cachedInput: 0,
+    cacheCreationInput: 0,
+    output: 0,
+    reasoningOutput: 0,
+    total: 0,
+  });
+
+const rawContentDuplicatesOf = (
+  files: readonly CodexExtractedFile[],
+  limit: number,
+  comparisonEntries: readonly CodexEventComparisonV5[] = [],
+): CodexRawContentDuplicateSummaryV5 => {
+  const groups = new Map<string, CodexRawContentDuplicateGroupV5>();
+  for (const file of files) {
+    for (const event of file.events) {
+      const aggregateTokens = rawUsageOf(event);
+      if (aggregateTokens <= 0) continue;
+      const sessionId = eventSessionId(file, event);
+      const rawContentFingerprint = stableHash(stableCodexEventJsonV5(event.raw));
+      const key = `${sessionId}\n${rawContentFingerprint}`;
+      const current = groups.get(key);
+      if (current) {
+        current.occurrences += 1;
+        current.eventIndexes.push(event.eventIndex);
+        current.sourcePaths.push(file.entry.path);
+        continue;
+      }
+      groups.set(key, {
+        sessionId,
+        rawContentFingerprint,
+        occurrences: 1,
+        eventIndexes: [event.eventIndex],
+        timestamp: typeof event.raw.timestamp === "number" ? event.raw.timestamp : undefined,
+        aggregateTokens,
+        sourcePaths: [file.entry.path],
+        v5OnlyOccurrences: 0,
+        v5OnlyTokens: 0,
+        unexplainedOccurrences: 0,
+        unexplainedTokens: 0,
+      });
+    }
+  }
+  const duplicateGroups = [...groups.values()]
+    .filter((group) => group.occurrences > 1)
+    .map((group) => {
+      const eventIndexes = [...group.eventIndexes].sort((left, right) => left - right);
+      const relatedEntries = comparisonEntries.filter((entry) =>
+        entry.sessionId === group.sessionId &&
+        eventIndexes.includes(entry.eventIndex) &&
+        entry.rawIdentity.endsWith(`:h${group.rawContentFingerprint}`));
+      return {
+        ...group,
+        eventIndexes,
+        sourcePaths: [...new Set(group.sourcePaths)].sort(),
+        v5OnlyOccurrences: relatedEntries.filter((entry) => entry.reason === "v5-only").length,
+        v5OnlyTokens: relatedEntries.filter((entry) => entry.reason === "v5-only").reduce((sum, entry) => sum + entry.v5.totalAfterFork, 0),
+        unexplainedOccurrences: relatedEntries.filter((entry) => !entry.explained).length,
+        unexplainedTokens: relatedEntries.filter((entry) => !entry.explained).reduce((sum, entry) => sum + entry.delta, 0),
+      };
+    })
+    .sort((left, right) =>
+      (right.aggregateTokens * (right.occurrences - 1)) - (left.aggregateTokens * (left.occurrences - 1)) ||
+      left.sessionId.localeCompare(right.sessionId) ||
+      left.rawContentFingerprint.localeCompare(right.rawContentFingerprint));
+  return {
+    groups: duplicateGroups.length,
+    duplicateOccurrences: duplicateGroups.reduce((sum, group) => sum + group.occurrences - 1, 0),
+    candidateExtraTokens: duplicateGroups.reduce((sum, group) => sum + group.aggregateTokens * (group.occurrences - 1), 0),
+    v5OnlyOccurrences: duplicateGroups.reduce((sum, group) => sum + group.v5OnlyOccurrences, 0),
+    v5OnlyTokens: duplicateGroups.reduce((sum, group) => sum + group.v5OnlyTokens, 0),
+    unexplainedOccurrences: duplicateGroups.reduce((sum, group) => sum + group.unexplainedOccurrences, 0),
+    unexplainedTokens: duplicateGroups.reduce((sum, group) => sum + group.unexplainedTokens, 0),
+    examples: duplicateGroups.slice(0, limit),
+  };
+};
+
+const v5DiagnosticsSummaryOf = (diagnostics: CodexV5ParserDiagnostics): CodexV5DiagnosticsSummary => ({
+  source: {
+    filesWithParseErrors: diagnostics.source.filesWithParseErrors,
+    parseErrorCount: diagnostics.source.parseErrorCount,
+    filesWithPendingText: diagnostics.source.filesWithPendingText,
+  },
+  decode: {
+    sessionIdentityConflicts: diagnostics.decode.sessionIdentityConflicts,
+    parentIdentityConflicts: diagnostics.decode.parentIdentityConflicts,
+  },
+  reconcile: {
+    logicalSessions: diagnostics.reconcile.logicalSessions,
+    exactDuplicateFiles: diagnostics.reconcile.exactDuplicateFiles,
+    prefixShadowedFiles: diagnostics.reconcile.prefixShadowedFiles,
+    conflictingLogicalSessions: diagnostics.reconcile.conflictingLogicalSessions,
+    orphanFiles: diagnostics.reconcile.orphanFiles,
+    conflicts: diagnostics.reconcile.conflicts.map((conflict) => ({
+      sessionId: conflict.sessionId,
+      reason: conflict.reason,
+      sourcePaths: [...conflict.sourcePaths],
+    })),
+  },
+  tokenCount: {
+    observedEvents: diagnostics.tokenCount.observedEvents,
+    exactRawDuplicateEvents: diagnostics.tokenCount.exactRawDuplicateEvents,
+    canonicalEvents: diagnostics.tokenCount.canonicalEvents,
+    canonicalTokens: diagnostics.tokenCount.canonicalTokens,
+    unresolved: diagnostics.tokenCount.methods.unresolved,
+    counterResets: diagnostics.tokenCount.counterResets,
+    incomparable: diagnostics.tokenCount.incomparable,
+  },
+  forkBaseline: {
+    forkSessions: diagnostics.forkBaseline.forkSessions,
+    missingParentSessions: diagnostics.forkBaseline.missingParentSessions,
+    missingForkTimestampSessions: diagnostics.forkBaseline.missingForkTimestampSessions,
+    missingParentCheckpointSessions: diagnostics.forkBaseline.missingParentCheckpointSessions,
+    missingChildTotalTimestampSessions: diagnostics.forkBaseline.missingChildTotalTimestampSessions,
+    incomparableBaselineSessions: diagnostics.forkBaseline.incomparableBaselineSessions,
+    cycleSessions: diagnostics.forkBaseline.cycleSessions,
+    conflictingParentSessions: diagnostics.forkBaseline.conflictingParentSessions,
+  },
+  forkReplay: {
+    replayPrefixMismatchSessions: diagnostics.forkReplay.replayPrefixMismatchSessions,
+    partialReplayBlockedEvents: diagnostics.forkReplay.partialReplayBlockedEvents,
+    missingReplayIdentityEvents: diagnostics.forkReplay.missingReplayIdentityEvents,
+  },
+  projection: {
+    missingTimestampContributions: diagnostics.projection.missingTimestampContributions,
+    missingTimestampTokens: diagnostics.projection.missingTimestampTokens,
+  },
+  invariants: { ...diagnostics.invariants },
+  activation: { ...diagnostics.activation },
+});
 
 const protocolNodes = (event: CodexExtractedEvent): { payload: Record<string, unknown>; msg?: Record<string, unknown>; info?: Record<string, unknown> } => {
   const payload = objectValue(event.raw.payload) ?? event.raw;
@@ -632,14 +821,27 @@ export function compareCodexV4V5(
     accountingBalanced,
   };
   const limit = Math.max(0, options.detailLimit ?? 20);
+  const v5Diagnostics = v5DiagnosticsSummaryOf(v5.diagnostics);
+  const conflicts = v5Diagnostics.reconcile.conflicts;
+  const rawContentDuplicates = rawContentDuplicatesOf(files, limit, comparisonEntries);
   const examplesByReason = emptyExamples();
   for (const reason of reasons) examplesByReason[reason] = comparisonEntries.filter((entry) => entry.reason === reason).slice().sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.key.localeCompare(right.key)).slice(0, limit);
   return {
-    comparatorVersion: 1,
+    comparatorVersion: 2,
     snapshot: { files: files.length },
     universe,
     v4: { recordCount: v4.recordCount, sessionCount: v4.sessionCount, usage: v4.usage, totalTokens: totalTokens(v4.usage) },
-    v5: { canonicalContributions: v5.sessions.reduce((sum, session) => sum + session.canonicalAfterForkReplay.length, 0), emittedRecords: v5.diagnostics.projection.emittedRecords, canonicalUsage, canonicalTokens: totalTokens(canonicalUsage), emittedTokens: v5.diagnostics.projection.emittedTokens, safeToActivate: v5.safeToActivate },
+    v5: {
+      canonicalContributions: v5.sessions.reduce((sum, session) => sum + session.canonicalAfterForkReplay.length, 0),
+      emittedRecords: v5.diagnostics.projection.emittedRecords,
+      canonicalUsage,
+      canonicalTokens: totalTokens(canonicalUsage),
+      emittedTokens: v5.diagnostics.projection.emittedTokens,
+      safeToActivate: v5.safeToActivate,
+      diagnostics: v5Diagnostics,
+    },
+    conflicts,
+    rawContentDuplicates,
     difference: { components, accountingTokens, projectionTokens: v5.diagnostics.projection.emittedTokens - totalTokens(canonicalUsage) },
     attribution: {
       byReason,

@@ -19,6 +19,12 @@ export interface CodexLogicalSessionConflictV5 {
   files: CodexDecodedFileV5[];
 }
 
+/** Safe-to-export conflict evidence without decoded event payloads. */
+export type CodexLogicalSessionConflictSummaryV5 = Pick<
+  CodexLogicalSessionConflictV5,
+  "sessionId" | "reason" | "sourcePaths"
+>;
+
 export interface CodexLogicalSessionReconcileDiagnosticsV5 {
   decodedFiles: number;
   logicalSessions: number;
@@ -26,6 +32,7 @@ export interface CodexLogicalSessionReconcileDiagnosticsV5 {
   prefixShadowedFiles: number;
   conflictingLogicalSessions: number;
   orphanFiles: number;
+  conflicts: CodexLogicalSessionConflictSummaryV5[];
 }
 
 export interface CodexLogicalSessionReconcileResultV5 {
@@ -137,6 +144,11 @@ export function reconcileCodexLogicalSessionsV5(
       prefixShadowedFiles,
       conflictingLogicalSessions: conflicts.length,
       orphanFiles: orphanFiles.length,
+      conflicts: conflicts.map(({ sessionId, reason, sourcePaths }) => ({
+        sessionId,
+        reason,
+        sourcePaths: [...sourcePaths],
+      })),
     },
   };
 }
