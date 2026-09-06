@@ -5,6 +5,7 @@ import type {
   FileScanResult,
   SourceScanResult,
 } from "@lw-aiusage/collectors";
+import { CodexCollectorV5 } from "@lw-aiusage/collectors";
 import { createFixturePlatform } from "@lw-aiusage/platform";
 import { MemoryUsageRepository } from "@lw-aiusage/storage";
 import { SyncManager } from "./sync";
@@ -146,5 +147,56 @@ describe("SyncManager", () => {
     expect(result.diagnostics).toEqual(["V5_UNSAFE"]);
     expect(await repository.getRecords({ source: "codex" })).toEqual([record]);
     expect(await repository.getCursors()).toEqual([cursor]);
+  });
+
+  it("migrates, restarts, rebuilds, appends, archives, and deletes a V5 source deterministically", async () => {
+    const firstContent = [
+      JSON.stringify({ type: "session_meta", payload: { id: "session-a", cwd: "/repo" } }),
+      JSON.stringify({ type: "token_count", timestamp: 100, payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 12, output_tokens: 3 } } } }),
+    ].join("\n") + "\n";
+    const appendedContent = `${firstContent}${JSON.stringify({ type: "token_count", timestamp: 110, payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 4, output_tokens: 1 } } } })}\n`;
+    const activePath = "/fixture/.codex/sessions/a.jsonl";
+    const archivePath = "/fixture/.codex/archived_sessions/a.jsonl";
+    const oldRecord = { id: "codex:v4:old", source: "codex" as const, sourcePath: activePath, timestamp: 1, model: "gpt-4", projectKey: "demo", usage: { inputTokens: 1, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } };
+    const oldCursor = { key: `codex:${activePath}`, source: "codex" as const, path: activePath, logicalId: "session-a", offset: firstContent.length, size: firstContent.length, modifiedAt: 1, pendingText: "", parserVersion: 4 };
+    const repository = new MemoryUsageRepository();
+    await repository.putRecords([oldRecord]);
+    await repository.putCursor(oldCursor);
+
+    const firstPlatform = createFixturePlatform({ [activePath]: firstContent });
+    const firstSync = await new SyncManager(firstPlatform, repository, [new CodexCollectorV5()]).sync();
+    const migrated = await repository.getRecords({ source: "codex" });
+    expect(firstSync.inserted).toBe(2);
+    expect(migrated).toHaveLength(1);
+    expect(migrated[0]?.id).not.toBe(oldRecord.id);
+    expect((await repository.getCursors()).every((cursor) => cursor.parserVersion === 5)).toBe(true);
+
+    const fingerprint = JSON.stringify(migrated);
+    const restarted = await new SyncManager(firstPlatform, repository, [new CodexCollectorV5()]).sync();
+    expect(restarted.inserted).toBe(0);
+    expect(restarted.skipped).toBe(1);
+    expect(JSON.stringify(await repository.getRecords({ source: "codex" }))).toBe(fingerprint);
+
+    const rebuiltRepository = new MemoryUsageRepository();
+    await new SyncManager(firstPlatform, rebuiltRepository, [new CodexCollectorV5()]).sync();
+    expect(await rebuiltRepository.getRecords({ source: "codex" })).toEqual(migrated);
+
+    const appendedPlatform = createFixturePlatform({ [activePath]: appendedContent });
+    await new SyncManager(appendedPlatform, repository, [new CodexCollectorV5()]).sync();
+    const beforeArchive = await repository.getRecords({ source: "codex" });
+    expect(beforeArchive).toHaveLength(2);
+
+    const archivePlatform = createFixturePlatform({ [archivePath]: appendedContent });
+    await new SyncManager(archivePlatform, repository, [new CodexCollectorV5()]).sync();
+    const archived = await repository.getRecords({ source: "codex" });
+    expect(archived).toHaveLength(2);
+    expect(archived.every((record) => record.sourcePath === archivePath)).toBe(true);
+    expect(archived.map(({ sourcePath: _sourcePath, ...record }) => record)).toEqual(
+      beforeArchive.map(({ sourcePath: _sourcePath, ...record }) => record),
+    );
+
+    await new SyncManager(createFixturePlatform({}), repository, [new CodexCollectorV5()]).sync();
+    expect(await repository.getRecords({ source: "codex" })).toEqual([]);
+    expect((await repository.getCursors()).filter((cursor) => cursor.source === "codex")).toEqual([]);
   });
 });
