@@ -12,6 +12,7 @@ export * from "./codex/forkHistoryAudit";
 export * from "./codex/payloadUsageOverlap";
 export * from "./codex/accounting";
 export * from "./codex/accountingV5";
+export * from "./codex/tokenCountDuplicateV5";
 export * from "./codex/payloadFallbackV5";
 export * from "./codex/forkReplayV5";
 export * from "./codex/eventDecoderV5";

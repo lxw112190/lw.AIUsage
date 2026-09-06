@@ -49,7 +49,7 @@ describe("Codex v4-v5 accounting comparator", () => {
       tokenEvent(1, 110, 20, "b"),
     ])]);
 
-    expect(result.comparatorVersion).toBe(3);
+    expect(result.comparatorVersion).toBe(4);
     expect(result.v4.totalTokens).toBe(30);
     expect(result.v5.canonicalTokens).toBe(30);
     expect(result.difference.accountingTokens).toBe(0);
@@ -57,6 +57,27 @@ describe("Codex v4-v5 accounting comparator", () => {
     expect(result.attribution.unexplainedDelta).toBe(0);
     expect(result.gates.accountingBalanced).toBe(true);
     expect(result.readyForCollectorSwitch).toBe(true);
+  });
+
+  it("does not turn a balanced TokenCount duplicate into a false-green activation", () => {
+    const first: CodexExtractedEvent = {
+      ...tokenEvent(0, 100, 10),
+      raw: { type: "token_count", timestamp: 100, payload: { model: "gpt-5", info: { total_token_usage: { input_tokens: 100, output_tokens: 0, total_tokens: 100 } } } },
+    };
+    const second: CodexExtractedEvent = {
+      ...first,
+      eventIndex: 1,
+      raw: { ...first.raw, payload: { ...(first.raw.payload as Record<string, unknown>), rate_limits: { remaining: 1 } } },
+    };
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [first, second])]);
+
+    expect(result.comparisonComplete).toBe(true);
+    expect(result.productionSemantics).toMatchObject({
+      tokenCountDuplicateSemantics: false,
+      unresolvedSemanticCandidates: 1,
+      validated: false,
+    });
+    expect(result.readyForCollectorSwitch).toBe(false);
   });
 
   it("attributes nested non-token usage to taxonomy correction", () => {
@@ -402,11 +423,10 @@ describe("Codex v4-v5 accounting comparator", () => {
     const second = { ...first, eventIndex: 1 };
     const result = compareCodexV4V5([file("/sessions/a.jsonl", [first, second])]);
 
-    expect(result.universe.v4RecordMapping.equivalentCollisionRecords).toBe(1);
+    expect(result.universe.v4RecordMapping.equivalentCollisionRecords).toBe(0);
     expect(result.universe.v4RecordMapping.ambiguousRecords).toBe(0);
-    expect(result.universe.v4RecordMapping.equivalentCollisionExamples[0]?.mappingKind).toBe("equivalent-collision");
-    expect(result.comparisonEntries.filter((entry) => entry.v4?.mappingKind === "equivalent-collision")).toHaveLength(1);
-    expect(result.comparisonEntries.find((entry) => entry.v4 === undefined)?.reason).toBe("v4-candidate-collision");
+    expect(result.v5.diagnostics.tokenCount.suppressedDuplicateEvents).toBe(1);
+    expect(result.v5.diagnostics.tokenCount.exactRawContentDuplicateEvents).toBe(1);
     expect(result.attribution.unexplainedDelta).toBe(0);
   });
 

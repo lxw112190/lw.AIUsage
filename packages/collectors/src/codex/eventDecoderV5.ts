@@ -66,6 +66,28 @@ function stableJsonValue(value: unknown): unknown {
 
 const stableJsonStringify = (value: unknown): string => JSON.stringify(stableJsonValue(value));
 
+const semanticJsonValue = (value: unknown, omitPayloadRateLimits = false): unknown => {
+  if (Array.isArray(value)) return value.map((item) => semanticJsonValue(item));
+  if (typeof value !== "object" || value === null) return value;
+  const object = value as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(object).sort()
+    .filter((key) => !(omitPayloadRateLimits && key === "rate_limits"))
+    .map((key) => [key, semanticJsonValue(object[key])]));
+};
+
+/** Ignores only the volatile payload.rate_limits metadata. */
+export function semanticTokenCountFingerprintV5(event: unknown): string {
+  const object = objectValue(event);
+  if (!object) return stableHash(stableJsonStringify(event));
+  const payload = objectValue(object.payload);
+  const normalized = payload
+    ? { ...object, payload: Object.fromEntries(Object.keys(payload).sort()
+      .filter((key) => key !== "rate_limits")
+      .map((key) => [key, semanticJsonValue(payload[key])])) }
+    : object;
+  return stableHash(stableJsonStringify(normalized));
+}
+
 export function codexTimestampV5(event: UnknownCodexEvent): number | undefined {
   const payload = objectValue(event.payload);
   const msg = objectValue(payload?.msg);
@@ -156,8 +178,10 @@ const decodedUsageOf = (...values: unknown[]) => {
   return undefined;
 };
 
+const rawContentFingerprintOf = (event: UnknownCodexEvent): string => stableHash(stableJsonStringify(event));
+
 const eventRawIdentity = (event: UnknownCodexEvent, eventIndex: number): string =>
-  `e${eventIndex}:h${stableHash(stableJsonStringify(event))}`;
+  `e${eventIndex}:h${rawContentFingerprintOf(event)}`;
 
 const emptyDiagnostics = (): CodexV5DecodeDiagnostics => ({
   tokenCountEvents: 0,
@@ -252,6 +276,8 @@ export function decodeCodexFileV5(input: CodexParsedFileInputV5): CodexDecodedFi
       tokenCount,
       payloadUsage: resolvedPayloadUsage,
       rawIdentity: eventRawIdentity(rawEvent, eventIndex),
+      rawContentFingerprint: rawContentFingerprintOf(rawEvent),
+      semanticContentFingerprint: semanticTokenCountFingerprintV5(rawEvent),
     };
     events.push(decoded);
   }

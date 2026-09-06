@@ -3,6 +3,7 @@ import {
   codexTimestampV5,
   decodeCodexFileV5,
   responseIdOf,
+  semanticTokenCountFingerprintV5,
   stableCodexEventJsonV5,
   turnIdOf,
 } from "./eventDecoderV5";
@@ -155,6 +156,25 @@ describe("Codex v5 event decoder", () => {
 
     expect(first.events[0]?.rawIdentity).toBe(second.events[0]?.rawIdentity);
     expect(stableCodexEventJsonV5({ b: 2, a: 1 })).toBe('{"a":1,"b":2}');
+  });
+
+  it("ignores only payload rate_limits in the semantic TokenCount fingerprint", () => {
+    const first = {
+      type: "token_count",
+      timestamp: 100,
+      payload: { info: { total_token_usage: { total_tokens: 10 } }, rate_limits: { remaining: 9 } },
+    };
+    const changedRateLimits = {
+      ...first,
+      payload: { ...first.payload, rate_limits: { remaining: 1 } },
+    };
+    const changedUsage = {
+      ...first,
+      payload: { ...first.payload, info: { total_token_usage: { total_tokens: 11 } } },
+    };
+
+    expect(semanticTokenCountFingerprintV5(first)).toBe(semanticTokenCountFingerprintV5(changedRateLimits));
+    expect(semanticTokenCountFingerprintV5(first)).not.toBe(semanticTokenCountFingerprintV5(changedUsage));
   });
 
   it("backfills a session discovered after early usage events", () => {

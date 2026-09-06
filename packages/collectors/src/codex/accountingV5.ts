@@ -23,6 +23,10 @@ export interface CodexAccountingEvent {
    * turn, or timestamp metadata.
    */
   rawIdentity: string;
+  /** Stable fingerprint of the complete decoded raw JSON event. */
+  rawContentFingerprint?: string;
+  /** Stable fingerprint with only payload.rate_limits removed. */
+  semanticContentFingerprint?: string;
 }
 
 export interface RawTokenUsage {
@@ -40,6 +44,26 @@ export interface RawTokenUsage {
     reasoningOutput: boolean;
     total: boolean;
   };
+}
+
+/** Compares a raw usage snapshot, including explicit field presence. */
+export function rawTokenUsageExactEqual(
+  left: RawTokenUsage | undefined,
+  right: RawTokenUsage | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.input === right.input &&
+    left.cachedInput === right.cachedInput &&
+    left.cacheCreationInput === right.cacheCreationInput &&
+    left.output === right.output &&
+    left.reasoningOutput === right.reasoningOutput &&
+    left.total === right.total &&
+    left.fieldPresence.input === right.fieldPresence.input &&
+    left.fieldPresence.cachedInput === right.fieldPresence.cachedInput &&
+    left.fieldPresence.cacheCreationInput === right.fieldPresence.cacheCreationInput &&
+    left.fieldPresence.output === right.fieldPresence.output &&
+    left.fieldPresence.reasoningOutput === right.fieldPresence.reasoningOutput &&
+    left.fieldPresence.total === right.fieldPresence.total;
 }
 
 export interface TokenCountState {

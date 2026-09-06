@@ -174,17 +174,42 @@ async function runRawAudit(): Promise<void> {
           <span>{{ t("settings.v5MigrationReady") }}</span><strong>{{ migrationStatus(usage.codexAccountingAuditReport.v5MigrationValidation.sourceSnapshotStable, usage.codexAccountingAuditReport.v5MigrationValidation.comparatorReady) }}</strong>
         </div>
         <h3 class="audit-subheading">{{ t("settings.v5Gates") }}</h3>
-        <div class="audit-breakdown">
-          <span>{{ t("settings.v5GateSource") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.sourceIntegrity) }}</span>
+         <div class="audit-breakdown">
+           <span>{{ t("settings.v5GateSource") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.sourceIntegrity) }}</span>
           <span>{{ t("settings.v5GateUniverse") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.universeComparable) }}</span>
           <span>{{ t("settings.v5GateInvariants") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.v5ParserInvariants) }}</span>
           <span>{{ t("settings.v5GateActivation") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.v5Activation) }}</span>
           <span>{{ t("settings.v5GateMapping") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.v4MappingComplete) }}</span>
           <span>{{ t("settings.v5GateAttribution") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.attributionComplete) }}</span>
           <span>{{ t("settings.v5GateBalanced") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.accountingBalanced) }}</span>
-          <span>{{ t("settings.v5GateSnapshot") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.sourceSnapshotStable) }}</span>
-        </div>
-        <h3 class="audit-subheading">{{ t("settings.v5Reasons") }}</h3>
+           <span>{{ t("settings.v5GateSnapshot") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.sourceSnapshotStable) }}</span>
+         </div>
+         <h3 class="audit-subheading">{{ t("settings.v5ProductionSemantics") }}</h3>
+         <div class="audit-summary">
+           <span>{{ t("settings.v5ComparisonComplete") }}</span><strong>{{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.comparisonComplete) }}</strong>
+           <span>{{ t("settings.v5ProductionValidated") }}</span><strong>{{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.productionSemantics.validated) }}</strong>
+           <span>{{ t("settings.v5UnresolvedCandidates") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.productionSemantics.unresolvedSemanticCandidates.toLocaleString() }}</strong>
+           <span>{{ t("settings.v5UnresolvedCandidateTokens") }}</span><strong>{{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.productionSemantics.unresolvedSemanticTokens) }} Token</strong>
+           <span>{{ t("settings.v5SuppressedEvents") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.suppressedDuplicateEvents.toLocaleString() }}</strong>
+           <span>{{ t("settings.v5SuppressedTokens") }}</span><strong>{{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.suppressedDuplicateTokens) }} Token</strong>
+         </div>
+         <div class="audit-breakdown">
+           <span>{{ t("settings.v5DuplicateCandidates") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.candidatePairs.toLocaleString() }}</span>
+           <span>{{ t("settings.v5DuplicateConfirmed") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.confirmedPairs.toLocaleString() }}</span>
+           <span>{{ t("settings.v5DuplicateStrong") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.strongPairs.toLocaleString() }}</span>
+           <span>{{ t("settings.v5DuplicateProbable") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.probablePairs.toLocaleString() }}</span>
+           <span>{{ t("settings.v5DuplicateConflicts") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.conflictPairs.toLocaleString() }}</span>
+           <span>{{ t("settings.v5SemanticCandidates") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.semanticDuplicateCandidates.toLocaleString() }}</span>
+           <span>{{ t("settings.v5TransitionPrimary") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.transition.primaryOnly.toLocaleString() }}</span>
+           <span>{{ t("settings.v5TransitionCandidate") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.transition.candidateOnly.toLocaleString() }}</span>
+           <span>{{ t("settings.v5TransitionBoth") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.transition.both.toLocaleString() }}</span>
+           <span>{{ t("settings.v5TransitionNeither") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.transition.neither.toLocaleString() }}</span>
+           <span>{{ t("settings.v5TransitionReset") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.transition.reset.toLocaleString() }}</span>
+           <span>{{ t("settings.v5TransitionUnresolved") }}: {{ (usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.transition.incomparable + usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.transition.insufficient).toLocaleString() }}</span>
+           <span>{{ t("settings.v5ProbablePrimaryTokens") }}: {{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.probablePrimaryTokens) }} Token</span>
+           <span>{{ t("settings.v5ProbableCandidateTokens") }}: {{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.tokenCount.duplicateEvidence.probableCandidateTokens) }} Token</span>
+         </div>
+         <h3 class="audit-subheading">{{ t("settings.v5Reasons") }}</h3>
         <div class="audit-breakdown">
           <span v-for="item in usage.codexAccountingAuditReport.v5MigrationValidation.comparison.attribution.byReason.filter((item) => item.events > 0)" :key="item.reason">
             {{ reasonLabel(item.reason) }}: {{ formatTokens(item.delta) }} Token / {{ item.events.toLocaleString() }}

@@ -9,6 +9,7 @@ import { resolveForkBaselinesV5, resolveForkReplayV5, type CanonicalUsageContrib
 import { reconcileCodexLogicalSessionsV5, type CodexLogicalSessionConflictSummaryV5, type CodexLogicalSessionReconcileResultV5 } from "./logicalSessionV5";
 import { deriveTokenCountContribution, type CodexAccountingEvent } from "./accountingV5";
 import { payloadUsageCandidateOf, resolvePayloadFallbackV5, type PayloadSuppression } from "./payloadFallbackV5";
+import type { CodexTokenCountDuplicateEvidenceSummary } from "./tokenCountDuplicateV5";
 import type { ParserV4MirrorRecord } from "./rawAuditTypes";
 import type { CodexV5ParserDiagnostics } from "./parserV5";
 
@@ -253,11 +254,24 @@ export interface CodexV5DiagnosticsSummary {
   tokenCount: {
     observedEvents: number;
     exactRawDuplicateEvents: number;
+    rawIdentityDuplicateEvents: number;
+    exactRawContentDuplicateEvents: number;
+    semanticDuplicateCandidates: number;
+    suppressedDuplicateEvents: number;
+    suppressedDuplicateTokens: number;
+    duplicateConflicts: number;
+    transition: CodexTokenCountDuplicateEvidenceSummary["transition"];
+    confirmedSuppressionTokens: number;
+    strongSuppressionCandidateTokens: number;
+    probablePrimaryTokens: number;
+    probableCandidateTokens: number;
+    representativeChoiceDelta: number;
     canonicalEvents: number;
     canonicalTokens: number;
     unresolved: number;
     counterResets: number;
     incomparable: number;
+    duplicateEvidence: CodexTokenCountDuplicateEvidenceSummary;
   };
   forkBaseline: Pick<CodexV5ParserDiagnostics["forkBaseline"],
     "forkSessions" | "missingParentSessions" | "missingForkTimestampSessions" |
@@ -279,8 +293,17 @@ export interface CodexV4V5ComparisonGates {
   accountingBalanced: boolean;
 }
 
+export interface CodexProductionSemanticValidation {
+  tokenCountDuplicateSemantics: boolean;
+  payloadFallbackSemantics: boolean;
+  forkSemantics: boolean;
+  unresolvedSemanticCandidates: number;
+  unresolvedSemanticTokens: number;
+  validated: boolean;
+}
+
 export interface CodexV4V5ComparisonReport {
-  comparatorVersion: 3;
+  comparatorVersion: 4;
   snapshot: { files: number };
   universe: CodexComparisonUniverse;
   v4: {
@@ -324,6 +347,8 @@ export interface CodexV4V5ComparisonReport {
     examplesByReason: Record<CodexV4V5DeltaReason, CodexEventComparisonV5[]>;
   };
   gates: CodexV4V5ComparisonGates;
+  comparisonComplete: boolean;
+  productionSemantics: CodexProductionSemanticValidation;
   readyForCollectorSwitch: boolean;
   comparisonEntries: CodexEventComparisonV5[];
 }
@@ -483,11 +508,27 @@ const v5DiagnosticsSummaryOf = (diagnostics: CodexV5ParserDiagnostics): CodexV5D
   tokenCount: {
     observedEvents: diagnostics.tokenCount.observedEvents,
     exactRawDuplicateEvents: diagnostics.tokenCount.exactRawDuplicateEvents,
+    rawIdentityDuplicateEvents: diagnostics.tokenCount.rawIdentityDuplicateEvents,
+    exactRawContentDuplicateEvents: diagnostics.tokenCount.exactRawContentDuplicateEvents,
+    semanticDuplicateCandidates: diagnostics.tokenCount.semanticDuplicateCandidates,
+    suppressedDuplicateEvents: diagnostics.tokenCount.suppressedDuplicateEvents,
+    suppressedDuplicateTokens: diagnostics.tokenCount.suppressedDuplicateTokens,
+    duplicateConflicts: diagnostics.tokenCount.duplicateConflicts,
+    transition: { ...diagnostics.tokenCount.duplicateEvidence.transition },
+    confirmedSuppressionTokens: diagnostics.tokenCount.duplicateEvidence.confirmedSuppressionTokens,
+    strongSuppressionCandidateTokens: diagnostics.tokenCount.duplicateEvidence.strongSuppressionCandidateTokens,
+    probablePrimaryTokens: diagnostics.tokenCount.duplicateEvidence.probablePrimaryTokens,
+    probableCandidateTokens: diagnostics.tokenCount.duplicateEvidence.probableCandidateTokens,
+    representativeChoiceDelta: diagnostics.tokenCount.duplicateEvidence.representativeChoiceDelta,
     canonicalEvents: diagnostics.tokenCount.canonicalEvents,
     canonicalTokens: diagnostics.tokenCount.canonicalTokens,
     unresolved: diagnostics.tokenCount.methods.unresolved,
     counterResets: diagnostics.tokenCount.counterResets,
     incomparable: diagnostics.tokenCount.incomparable,
+    duplicateEvidence: {
+      ...diagnostics.tokenCount.duplicateEvidence,
+      examples: diagnostics.tokenCount.duplicateEvidence.examples.slice(),
+    },
   },
   forkBaseline: {
     forkSessions: diagnostics.forkBaseline.forkSessions,
@@ -1208,7 +1249,29 @@ export function compareCodexV4V5(
     attributionComplete,
     accountingBalanced,
   };
+  const comparisonComplete = Object.values(gates).every(Boolean);
   const v5Diagnostics = v5DiagnosticsSummaryOf(v5.diagnostics);
+  const duplicateEvidence = v5Diagnostics.tokenCount.duplicateEvidence;
+  const unresolvedSemanticCandidates = duplicateEvidence.candidatePairs - duplicateEvidence.confirmedPairs;
+  const tokenCountDuplicateSemantics = unresolvedSemanticCandidates === 0 && v5Diagnostics.tokenCount.duplicateConflicts === 0;
+  const productionSemantics: CodexProductionSemanticValidation = {
+    tokenCountDuplicateSemantics,
+    payloadFallbackSemantics: v5.diagnostics.activation.tokenCountCompleteness &&
+      v5Diagnostics.invariants.payloadEvent &&
+      v5Diagnostics.invariants.payloadToken,
+    forkSemantics: v5.diagnostics.activation.forkResolution &&
+      v5Diagnostics.invariants.forkContribution &&
+      v5Diagnostics.invariants.forkToken,
+    unresolvedSemanticCandidates,
+    unresolvedSemanticTokens: duplicateEvidence.unresolvedCandidateTokens,
+    validated: tokenCountDuplicateSemantics &&
+      v5.diagnostics.activation.tokenCountCompleteness &&
+      v5Diagnostics.invariants.payloadEvent &&
+      v5Diagnostics.invariants.payloadToken &&
+      v5.diagnostics.activation.forkResolution &&
+      v5Diagnostics.invariants.forkContribution &&
+      v5Diagnostics.invariants.forkToken,
+  };
   const conflicts = v5Diagnostics.reconcile.conflicts;
   const duplicateGroups = rawContentDuplicateGroupsOf(files, comparisonEntries);
   const rawContentDuplicates = rawContentDuplicatesOf(duplicateGroups, limit);
@@ -1216,7 +1279,7 @@ export function compareCodexV4V5(
   const examplesByReason = emptyExamples();
   for (const reason of reasons) examplesByReason[reason] = comparisonEntries.filter((entry) => entry.reason === reason).slice().sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.key.localeCompare(right.key)).slice(0, limit);
   return {
-    comparatorVersion: 3,
+    comparatorVersion: 4,
     snapshot: { files: files.length },
     universe,
     v4: { recordCount: v4.recordCount, sessionCount: v4.sessionCount, usage: v4.usage, totalTokens: totalTokens(v4.usage) },
@@ -1247,7 +1310,9 @@ export function compareCodexV4V5(
     largestAbsoluteSessionDelta: [...sessions].sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.sessionId.localeCompare(right.sessionId)).slice(0, 20),
     details: { unexplained: unexplainedEntries.slice(0, limit), largestChanges: [...changedEntries].sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.key.localeCompare(right.key)).slice(0, limit), examplesByReason },
     gates,
-    readyForCollectorSwitch: Object.values(gates).every(Boolean),
+    comparisonComplete,
+    productionSemantics,
+    readyForCollectorSwitch: comparisonComplete && productionSemantics.validated,
     comparisonEntries,
   };
 }

@@ -27,6 +27,10 @@ import {
   type TokenCountAccountingMethod,
   type TokenCountState,
 } from "./accountingV5";
+import {
+  resolveTokenCountDuplicatesV5,
+  type CodexTokenCountDuplicateEvidenceSummary,
+} from "./tokenCountDuplicateV5";
 import { decodeCodexFileV5, type CodexDecodedFileV5, type CodexParsedFileInputV5, type CodexV5DecodeDiagnostics } from "./eventDecoderV5";
 import {
   reconcileCodexLogicalSessionsV5,
@@ -66,6 +70,13 @@ export interface CodexV5TokenCountDiagnostics {
   componentConsistencyMismatch: number;
   incomparable: number;
   repeatedTotalWithNonZeroLast: number;
+  duplicateEvidence: CodexTokenCountDuplicateEvidenceSummary;
+  rawIdentityDuplicateEvents: number;
+  exactRawContentDuplicateEvents: number;
+  semanticDuplicateCandidates: number;
+  suppressedDuplicateEvents: number;
+  suppressedDuplicateTokens: number;
+  duplicateConflicts: number;
 }
 
 export interface CodexV5ProjectionDiagnostics {
@@ -91,6 +102,7 @@ export interface CodexV5SourceIntegrityDiagnostics {
 
 export interface CodexV5ParserInvariants {
   logicalSessionReconciliation: boolean;
+  tokenCountDuplicateEvent: boolean;
   payloadEvent: boolean;
   payloadToken: boolean;
   forkContribution: boolean;
@@ -156,7 +168,60 @@ const emptyTokenDiagnostics = (): CodexV5TokenCountDiagnostics => ({
   componentConsistencyMismatch: 0,
   incomparable: 0,
   repeatedTotalWithNonZeroLast: 0,
+  duplicateEvidence: {
+    candidatePairs: 0,
+    confirmedPairs: 0,
+    strongPairs: 0,
+    probablePairs: 0,
+    conflictPairs: 0,
+    insufficientPairs: 0,
+    confirmedCandidateTokens: 0,
+    strongCandidateTokens: 0,
+    probableCandidateTokens: 0,
+    unresolvedCandidateTokens: 0,
+    transition: { primaryOnly: 0, candidateOnly: 0, both: 0, neither: 0, reset: 0, incomparable: 0, insufficient: 0 },
+    confirmedSuppressionTokens: 0,
+    strongSuppressionCandidateTokens: 0,
+    probablePrimaryTokens: 0,
+    representativeChoiceDelta: 0,
+    examples: [],
+  },
+  rawIdentityDuplicateEvents: 0,
+  exactRawContentDuplicateEvents: 0,
+  semanticDuplicateCandidates: 0,
+  suppressedDuplicateEvents: 0,
+  suppressedDuplicateTokens: 0,
+  duplicateConflicts: 0,
 });
+
+const mergeDuplicateEvidence = (
+  target: CodexTokenCountDuplicateEvidenceSummary,
+  source: CodexTokenCountDuplicateEvidenceSummary,
+): void => {
+  target.candidatePairs += source.candidatePairs;
+  target.confirmedPairs += source.confirmedPairs;
+  target.strongPairs += source.strongPairs;
+  target.probablePairs += source.probablePairs;
+  target.conflictPairs += source.conflictPairs;
+  target.insufficientPairs += source.insufficientPairs;
+  target.confirmedCandidateTokens += source.confirmedCandidateTokens;
+  target.strongCandidateTokens += source.strongCandidateTokens;
+  target.probableCandidateTokens += source.probableCandidateTokens;
+  target.unresolvedCandidateTokens += source.unresolvedCandidateTokens;
+  target.transition.primaryOnly += source.transition.primaryOnly;
+  target.transition.candidateOnly += source.transition.candidateOnly;
+  target.transition.both += source.transition.both;
+  target.transition.neither += source.transition.neither;
+  target.transition.reset += source.transition.reset;
+  target.transition.incomparable += source.transition.incomparable;
+  target.transition.insufficient += source.transition.insufficient;
+  target.confirmedSuppressionTokens += source.confirmedSuppressionTokens;
+  target.strongSuppressionCandidateTokens += source.strongSuppressionCandidateTokens;
+  target.probablePrimaryTokens += source.probablePrimaryTokens;
+  target.probableCandidateTokens += source.probableCandidateTokens;
+  target.representativeChoiceDelta += source.representativeChoiceDelta;
+  target.examples.push(...source.examples);
+}
 
 const payloadDiagnosticKeys: (keyof PayloadFallbackDiagnostics)[] = [
   "observedPayloadEvents",
@@ -216,10 +281,18 @@ const accountLogicalSession = (
     .filter((event) => !!event.tokenCount)
     .sort(eventOrder);
   const deduplicated = deduplicateTokenCountEvents(tokenEvents);
+  const duplicateResolution = resolveTokenCountDuplicatesV5(deduplicated.events);
+  mergeDuplicateEvidence(tokenDiagnostics.duplicateEvidence, duplicateResolution.summary);
   tokenDiagnostics.observedEvents += tokenEvents.length;
   tokenDiagnostics.exactRawDuplicateEvents += deduplicated.exactDuplicateCount;
+  tokenDiagnostics.rawIdentityDuplicateEvents += deduplicated.exactDuplicateCount;
+  tokenDiagnostics.exactRawContentDuplicateEvents += duplicateResolution.diagnostics.exactRawContentDuplicateEvents;
+  tokenDiagnostics.semanticDuplicateCandidates += duplicateResolution.diagnostics.semanticDuplicateCandidates;
+  tokenDiagnostics.suppressedDuplicateEvents += duplicateResolution.diagnostics.suppressedDuplicateEvents;
+  tokenDiagnostics.suppressedDuplicateTokens += duplicateResolution.diagnostics.suppressedDuplicateTokens;
+  tokenDiagnostics.duplicateConflicts += duplicateResolution.diagnostics.duplicateConflicts;
   const tokenCountRefs: CanonicalTokenCountRef[] = [];
-  for (const event of deduplicated.events) {
+  for (const event of duplicateResolution.events) {
     const contribution = deriveTokenCountContribution(event, state);
     if (!contribution) continue;
     state = contribution.nextState;
@@ -231,7 +304,7 @@ const accountLogicalSession = (
     const ref = canonicalTokenCountRefOf(event, contribution);
     if (ref) tokenCountRefs.push(ref);
   }
-  tokenDiagnostics.canonicalEvents += tokenCountRefs.length;
+  tokenDiagnostics.canonicalEvents += duplicateResolution.events.length;
   tokenDiagnostics.canonicalTokens += tokenCountRefs.reduce((sum, ref) => sum + ref.aggregateTotal, 0);
   const payloads = session.events.map(payloadUsageCandidateOf).filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate);
   const payloadResult = resolvePayloadFallbackV5(tokenCountRefs, payloads);
@@ -289,7 +362,7 @@ const buildActivationGates = (
   sourceIntegrity: source.parseErrorCount === 0 && source.filesWithPendingText === 0,
   sessionIdentity: decode.sessionIdentityConflicts === 0 && decode.parentIdentityConflicts === 0,
   timestampCompleteness: projection.missingTimestampContributions === 0 && projection.missingTimestampTokens === 0,
-  tokenCountCompleteness: tokenCount.methods.unresolved === 0,
+  tokenCountCompleteness: tokenCount.methods.unresolved === 0 && tokenCount.duplicateConflicts === 0,
   forkResolution: baseline.missingParentSessions === 0 &&
     baseline.missingForkTimestampSessions === 0 &&
     baseline.missingParentCheckpointSessions === 0 &&
@@ -421,6 +494,10 @@ export function parseCodexFilesV5(
   });
   const invariants: CodexV5ParserInvariants = {
     logicalSessionReconciliation: reconciled.conflicts.length === 0 && reconciled.orphanFiles.length === 0,
+    tokenCountDuplicateEvent: tokenDiagnostics.observedEvents ===
+      tokenDiagnostics.canonicalEvents +
+      tokenDiagnostics.rawIdentityDuplicateEvents +
+      tokenDiagnostics.exactRawContentDuplicateEvents,
     payloadEvent: accounted.every((result) => result.payloadEventInvariant),
     payloadToken: accounted.every((result) => result.payloadTokenInvariant),
     forkContribution: replay.contributionInvariant,

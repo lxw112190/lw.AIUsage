@@ -1,7 +1,7 @@
-import { CodexCollectorV5 } from "./codex/collectorV5";
+import { CodexCollector } from "./codex/collector";
 import { ClaudeCollector } from "./claude/collector";
 import type { Collector } from "./types";
 export const defaultCollectors = (): Collector[] => [
-  new CodexCollectorV5(),
+  new CodexCollector(),
   new ClaudeCollector(),
 ];

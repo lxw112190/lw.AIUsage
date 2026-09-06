@@ -46,7 +46,12 @@ export interface CodexRecordReconciliation {
 
 export interface CodexAccountingAuditReport {
   auditVersion: 3;
-  auditRevision: 13;
+  auditRevision: 15;
+  candidateAccountingRevision: 1;
+  baselineParserVersion: 4;
+  candidateParserVersion: 5;
+  productionParserVersion: 4;
+  /** @deprecated Use the explicit baseline/candidate/production version fields. */
   parserVersion: 4;
   accounting: "codex-accounting-audit-v3";
   generatedAt: number;
@@ -101,6 +106,8 @@ export interface CodexV5MigrationValidation {
   comparison: CodexV5ComparisonSummary;
   sourceSnapshotStable: boolean;
   snapshotStable: boolean;
+  comparisonComplete: boolean;
+  productionSemanticsValidated: boolean;
   comparatorReady: boolean;
   readyForCollectorSwitch: boolean;
 }
@@ -167,6 +174,8 @@ export class CodexAccountingAuditService {
       comparison: compactComparison,
       sourceSnapshotStable,
       snapshotStable: sourceSnapshotStable,
+      comparisonComplete: comparison.comparisonComplete,
+      productionSemanticsValidated: comparison.productionSemantics.validated,
       comparatorReady: comparison.readyForCollectorSwitch,
       readyForCollectorSwitch: sourceSnapshotStable && comparison.readyForCollectorSwitch,
     };
@@ -179,7 +188,11 @@ export class CodexAccountingAuditService {
     const sessionCountMatched = mirror.sessionCount === database.sessionCount;
     return {
       auditVersion: 3,
-      auditRevision: 13,
+      auditRevision: 15,
+      candidateAccountingRevision: 1,
+      baselineParserVersion: 4,
+      candidateParserVersion: 5,
+      productionParserVersion: 4,
       parserVersion: 4,
       accounting: "codex-accounting-audit-v3",
       generatedAt: Date.now(),

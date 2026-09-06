@@ -148,6 +148,39 @@ describe("Codex v5 parser pipeline", () => {
     expect(result.sessions[0]?.payloadFallbacks).toHaveLength(0);
   });
 
+  it("reports TokenCount duplicate evidence without changing accounting", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/a.jsonl", [
+        sessionMeta("a", 100),
+        tokenCount(110, {}, { total: { input_tokens: 100, output_tokens: 0, total_tokens: 100 } }),
+        tokenCount(110, {}, { total: { input_tokens: 100, output_tokens: 0, total_tokens: 100 } }),
+      ]),
+    ]);
+
+    expect(result.diagnostics.tokenCount.duplicateEvidence.candidatePairs).toBe(1);
+    expect(result.diagnostics.tokenCount.duplicateEvidence.confirmedPairs).toBe(1);
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]?.usage.inputTokens).toBe(100);
+    expect(result.safeToActivate).toBe(true);
+  });
+
+  it("suppresses an exact duplicate before last-usage accounting state advances", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/a.jsonl", [
+        sessionMeta("a", 100),
+        tokenCount(110, { input_tokens: 100, output_tokens: 0 }, { total: { input_tokens: 100, output_tokens: 0, total_tokens: 100 } }),
+        tokenCount(120, { input_tokens: 20, output_tokens: 0 }, { total: { input_tokens: 120, output_tokens: 0, total_tokens: 120 } }),
+        tokenCount(120, { input_tokens: 20, output_tokens: 0 }, { total: { input_tokens: 120, output_tokens: 0, total_tokens: 120 } }),
+        tokenCount(130, { input_tokens: 30, output_tokens: 0 }, { total: { input_tokens: 150, output_tokens: 0, total_tokens: 150 } }),
+      ]),
+    ]);
+
+    expect(result.diagnostics.tokenCount.suppressedDuplicateEvents).toBe(1);
+    expect(result.diagnostics.tokenCount.suppressedDuplicateTokens).toBe(20);
+    expect(result.records.reduce((sum, record) => sum + record.usage.inputTokens, 0)).toBe(150);
+    expect(result.records).toHaveLength(3);
+  });
+
   it("keeps a conflicting payload as a second contribution with a distinct slot id", () => {
     const result = parseCodexFilesV5([
       input("/sessions/a.jsonl", [
