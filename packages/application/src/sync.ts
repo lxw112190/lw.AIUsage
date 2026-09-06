@@ -1,11 +1,13 @@
 import { aggregateBuckets } from "@lw-aiusage/core";
 import type {
   Collector,
+  CollectorFile,
   CollectorProgress,
   JsonlParserPort,
+  SourceCollector,
 } from "@lw-aiusage/collectors";
 import type { RuntimePlatform, WatchHandle } from "@lw-aiusage/platform";
-import type { UsageRepository } from "@lw-aiusage/storage";
+import type { FileCursor, UsageRepository } from "@lw-aiusage/storage";
 import { reconcileCollectorFiles } from "./sessionReconcile";
 import { WatchManager } from "./watchManager";
 import { QueryService } from "./query";
@@ -57,6 +59,34 @@ export class SyncManager {
         onProgress,
       });
       files += discovered.length;
+      if (collector.scanMode === "source") {
+        if (!sourceNeedsScan(collector, discovered, cursors)) {
+          skipped += discovered.length;
+          continue;
+        }
+        const scanned = await collector.scanSource({
+          platform: this.platform,
+          files: discovered,
+          cursors,
+          parser: this.parser,
+          onProgress,
+        });
+        diagnostics.push(...scanned.diagnostics);
+        if (!scanned.safeToCommit) continue;
+        const currentRecords = await this.repository.getRecords();
+        const nextBuckets = aggregateBuckets([
+          ...currentRecords.filter((record) => record.source !== collector.source),
+          ...scanned.records,
+        ]);
+        const replaced = await this.repository.replaceSourceSnapshot(
+          collector.source,
+          scanned.records,
+          scanned.cursors,
+          nextBuckets,
+        );
+        inserted += replaced.recordChanges;
+        continue;
+      }
       const reconciled = await reconcileCollectorFiles(
         this.repository,
         collector.source,
@@ -147,6 +177,25 @@ export class SyncManager {
       },
     };
   }
+}
+
+export function sourceNeedsScan(
+  collector: SourceCollector,
+  files: readonly CollectorFile[],
+  cursors: readonly FileCursor[],
+): boolean {
+  const sourceCursors = cursors.filter((cursor) => cursor.source === collector.source);
+  if (sourceCursors.length !== files.length) return true;
+  const cursorByPath = new Map(sourceCursors.map((cursor) => [cursor.path, cursor]));
+  for (const file of files) {
+    const cursor = cursorByPath.get(file.path);
+    if (!cursor) return true;
+    if (cursor.parserVersion !== collector.parserVersion) return true;
+    if (cursor.size !== file.size || cursor.modifiedAt !== file.modifiedAt) return true;
+    if (cursor.offset < file.size) return true;
+    if (cursor.logicalId !== file.logicalId) return true;
+  }
+  return false;
 }
 export interface DashboardSummary {
   records: number;

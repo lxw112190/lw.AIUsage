@@ -1,10 +1,10 @@
 import type { FileCursor } from "@lw-aiusage/storage";
 import type { TokenUsage } from "@lw-aiusage/core";
 import type {
-  Collector,
   CollectorContext,
   CollectorDetection,
   CollectorFile,
+  FileCollector,
   FileScanContext,
   FileScanResult,
 } from "../types";
@@ -51,10 +51,11 @@ async function recursiveJsonl(
   return files;
 }
 
-export class CodexCollector implements Collector {
+export class CodexCollector implements FileCollector {
   readonly source = "codex" as const;
   readonly name = "Codex";
   readonly parserVersion = 4;
+  readonly scanMode = "file" as const;
   readonly fileReconcileMode = "logical-singleton" as const;
   private readonly sessionTotals = new Map<string, TokenUsage>();
   async roots(context: CollectorContext): Promise<string[]> {

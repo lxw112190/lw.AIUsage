@@ -41,13 +41,31 @@ export interface FileScanResult {
   diagnostics: string[];
   replaceRecords?: boolean;
 }
-export interface Collector {
+export interface FileCollector extends CollectorBase {
+  readonly scanMode: "file";
+  readonly fileReconcileMode: FileReconcileMode;
+  scanFile(context: FileScanContext): Promise<FileScanResult>;
+}
+export interface SourceScanContext extends CollectorContext {
+  files: readonly CollectorFile[];
+  cursors: readonly FileCursor[];
+}
+export interface SourceScanResult {
+  records: UsageRecord[];
+  cursors: FileCursor[];
+  diagnostics: string[];
+  safeToCommit: boolean;
+}
+export interface SourceCollector extends CollectorBase {
+  readonly scanMode: "source";
+  scanSource(context: SourceScanContext): Promise<SourceScanResult>;
+}
+export interface CollectorBase {
   readonly source: AgentSource;
   readonly name: string;
   readonly parserVersion: number;
-  readonly fileReconcileMode: FileReconcileMode;
   detect(context: CollectorContext): Promise<CollectorDetection>;
   roots(context: CollectorContext): Promise<string[]>;
   discoverFiles(context: CollectorContext): Promise<CollectorFile[]>;
-  scanFile(context: FileScanContext): Promise<FileScanResult>;
 }
+export type Collector = FileCollector | SourceCollector;

@@ -15,6 +15,7 @@ import type {
   UsageRepository,
   SourceUsageSummary,
   SourceAuditRecord,
+  SourceReplaceResult,
 } from "./repository";
 
 class AiUsageDatabase extends Dexie {
@@ -125,6 +126,66 @@ export class DexieUsageRepository implements UsageRepository {
       },
     );
     return changed;
+  }
+  async replaceSourceSnapshot(
+    source: AgentSource,
+    records: readonly UsageRecord[],
+    cursors: readonly FileCursor[],
+    buckets: readonly UsageBucket[],
+  ): Promise<SourceReplaceResult> {
+    if (records.some((record) => record.source !== source))
+      throw new Error("SOURCE_SNAPSHOT_RECORD_MISMATCH");
+    if (cursors.some((cursor) => cursor.source !== source))
+      throw new Error("SOURCE_SNAPSHOT_CURSOR_MISMATCH");
+    let recordChanges = 0;
+    let cursorChanges = 0;
+    await this.db.transaction(
+      "rw",
+      this.db.records,
+      this.db.cursors,
+      this.db.buckets,
+      async () => {
+        const oldRecords = await this.db.records.where("source").equals(source).toArray();
+        const oldRecordsById = new Map(oldRecords.map((record) => [record.id, record]));
+        const nextRecordsById = new Map(records.map((record) => [record.id, record]));
+        for (const oldRecord of oldRecords) {
+          const nextRecord = nextRecordsById.get(oldRecord.id);
+          if (!nextRecord) {
+            await this.db.records.delete(oldRecord.id);
+            recordChanges += 1;
+          } else if (!recordsEqual(oldRecord, nextRecord)) {
+            await this.db.records.put(nextRecord);
+            recordChanges += 1;
+          }
+        }
+        for (const record of records) if (!oldRecordsById.has(record.id)) {
+          await this.db.records.put(record);
+          recordChanges += 1;
+        }
+        const oldCursors = await this.db.cursors.where("source").equals(source).toArray();
+        const oldCursorsByKey = new Map(oldCursors.map((cursor) => [cursor.key, cursor]));
+        const nextCursorsByKey = new Map(cursors.map((cursor) => [cursor.key, cursor]));
+        for (const oldCursor of oldCursors) {
+          const nextCursor = nextCursorsByKey.get(oldCursor.key);
+          if (!nextCursor) {
+            await this.db.cursors.delete(oldCursor.key);
+            cursorChanges += 1;
+          } else if (JSON.stringify(oldCursor) !== JSON.stringify(nextCursor)) {
+            await this.db.cursors.put(nextCursor);
+            cursorChanges += 1;
+          }
+        }
+        for (const cursor of cursors) if (!oldCursorsByKey.has(cursor.key)) {
+          await this.db.cursors.put(cursor);
+          cursorChanges += 1;
+        }
+        if (recordChanges > 0 || cursorChanges > 0) {
+          await this.db.buckets.clear();
+          await this.db.buckets.bulkPut([...buckets]);
+        }
+      },
+    );
+    return { recordChanges, cursorChanges };
   }
   async migrateFileCursor(oldCursor: FileCursor, newFile: { path: string; size: number; modifiedAt: number; logicalId?: string }): Promise<FileCursor> {
     const reset = newFile.size < oldCursor.offset;

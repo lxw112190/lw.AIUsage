@@ -23,6 +23,10 @@ export interface FileCursor {
 export interface CommitScanOptions {
   replaceRecords?: boolean;
 }
+export interface SourceReplaceResult {
+  recordChanges: number;
+  cursorChanges: number;
+}
 export interface MigratedFile {
   path: string;
   size: number;
@@ -70,6 +74,12 @@ export interface UsageRepository {
     cursor: FileCursor,
     options?: CommitScanOptions,
   ): Promise<number>;
+  replaceSourceSnapshot(
+    source: AgentSource,
+    records: readonly UsageRecord[],
+    cursors: readonly FileCursor[],
+    buckets: readonly UsageBucket[],
+  ): Promise<SourceReplaceResult>;
   migrateFileCursor(oldCursor: FileCursor, newFile: MigratedFile): Promise<FileCursor>;
   getRecords(query?: UsageQuery): Promise<UsageRecord[]>;
   getRecordsPage(query: UsagePageQuery): Promise<UsagePageResult>;
@@ -123,6 +133,58 @@ export class MemoryUsageRepository implements UsageRepository {
     changed += await this.putRecords(records);
     await this.putCursor(cursor);
     return changed;
+  }
+  async replaceSourceSnapshot(
+    source: AgentSource,
+    records: readonly UsageRecord[],
+    cursors: readonly FileCursor[],
+    buckets: readonly UsageBucket[],
+  ): Promise<SourceReplaceResult> {
+    if (records.some((record) => record.source !== source))
+      throw new Error("SOURCE_SNAPSHOT_RECORD_MISMATCH");
+    if (cursors.some((cursor) => cursor.source !== source))
+      throw new Error("SOURCE_SNAPSHOT_CURSOR_MISMATCH");
+    const oldRecords = [...this.records.values()].filter((record) => record.source === source);
+    const oldCursors = [...this.cursors.values()].filter((cursor) => cursor.source === source);
+    const oldRecordsById = new Map(oldRecords.map((record) => [record.id, record]));
+    const nextRecordsById = new Map(records.map((record) => [record.id, record]));
+    let recordChanges = 0;
+    for (const oldRecord of oldRecords) {
+      const nextRecord = nextRecordsById.get(oldRecord.id);
+      if (!nextRecord) {
+        this.records.delete(oldRecord.id);
+        recordChanges += 1;
+      } else if (JSON.stringify(oldRecord) !== JSON.stringify(nextRecord)) {
+        this.records.set(oldRecord.id, nextRecord);
+        recordChanges += 1;
+      }
+    }
+    for (const record of records) if (!oldRecordsById.has(record.id)) {
+      this.records.set(record.id, record);
+      recordChanges += 1;
+    }
+    const oldCursorsByKey = new Map(oldCursors.map((cursor) => [cursor.key, cursor]));
+    const nextCursorsByKey = new Map(cursors.map((cursor) => [cursor.key, cursor]));
+    let cursorChanges = 0;
+    for (const oldCursor of oldCursors) {
+      const nextCursor = nextCursorsByKey.get(oldCursor.key);
+      if (!nextCursor) {
+        this.cursors.delete(oldCursor.key);
+        cursorChanges += 1;
+      } else if (JSON.stringify(oldCursor) !== JSON.stringify(nextCursor)) {
+        this.cursors.set(oldCursor.key, nextCursor);
+        cursorChanges += 1;
+      }
+    }
+    for (const cursor of cursors) if (!oldCursorsByKey.has(cursor.key)) {
+      this.cursors.set(cursor.key, cursor);
+      cursorChanges += 1;
+    }
+    if (recordChanges > 0 || cursorChanges > 0) {
+      this.buckets.clear();
+      for (const bucket of buckets) this.buckets.set(bucket.id, bucket);
+    }
+    return { recordChanges, cursorChanges };
   }
   async migrateFileCursor(oldCursor: FileCursor, newFile: MigratedFile): Promise<FileCursor> {
     const reset = newFile.size < oldCursor.offset;

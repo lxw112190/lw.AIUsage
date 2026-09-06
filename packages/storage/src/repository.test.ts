@@ -106,4 +106,35 @@ describe("repository scan commit", () => {
     expect(await repository.commitScan([updated], cursor)).toBe(1);
     expect((await repository.getRecords())[0]?.usage.outputTokens).toBe(4);
   });
+
+  it("atomically replaces one source while preserving other sources and buckets", async () => {
+    const repository = new MemoryUsageRepository();
+    const usage = { inputTokens: 1, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 };
+    await repository.putRecords([
+      { id: "codex-v4-a", source: "codex", sourcePath: "sessions/a.jsonl", timestamp: 1, model: "gpt-4", projectKey: "p", usage },
+      { id: "codex-v4-b", source: "codex", sourcePath: "sessions/b.jsonl", timestamp: 2, model: "gpt-4", projectKey: "p", usage },
+      { id: "claude-c", source: "claude", sourcePath: "claude/c.jsonl", timestamp: 3, model: "claude", projectKey: "q", usage },
+    ]);
+    const oldCursor = (path: string): FileCursor => ({ key: `codex:${path}`, source: "codex", path, offset: 10, size: 10, modifiedAt: 1, pendingText: "", parserVersion: 4 });
+    await repository.putCursor(oldCursor("sessions/a.jsonl"));
+    await repository.putCursor(oldCursor("sessions/b.jsonl"));
+    await repository.putCursor({ key: "claude:claude/c.jsonl", source: "claude", path: "claude/c.jsonl", offset: 10, size: 10, modifiedAt: 1, pendingText: "", parserVersion: 4 });
+    await repository.putBuckets([{ id: "old", bucketStart: 0, source: "codex", model: "gpt-4", projectKey: "p", usage, recordCount: 2, sessionCount: 2 }]);
+    const nextRecord = { id: "codex-v5", source: "codex" as const, sourcePath: "archived_sessions/a.jsonl", timestamp: 4, model: "gpt-5", projectKey: "p", usage };
+    const nextCursor: FileCursor = { key: "codex:archived_sessions/a.jsonl", source: "codex", path: "archived_sessions/a.jsonl", logicalId: "session-a", offset: 20, size: 20, modifiedAt: 2, pendingText: "", parserVersion: 5 };
+    const nextBuckets = [{ id: "next", bucketStart: 0, source: "codex" as const, model: "gpt-5", projectKey: "p", usage, recordCount: 1, sessionCount: 1 }];
+
+    const result = await repository.replaceSourceSnapshot("codex", [nextRecord], [nextCursor], nextBuckets);
+
+    expect(result.recordChanges).toBe(3);
+    expect(result.cursorChanges).toBe(3);
+    expect((await repository.getRecords()).map((record) => record.id).sort()).toEqual(["claude-c", "codex-v5"]);
+    expect((await repository.getCursors()).map((cursor) => cursor.key).sort()).toEqual(["claude:claude/c.jsonl", "codex:archived_sessions/a.jsonl"]);
+    expect(await repository.getBuckets()).toEqual(nextBuckets);
+  });
+
+  it("rejects records from a different source before replacing anything", async () => {
+    const repository = new MemoryUsageRepository();
+    await expect(repository.replaceSourceSnapshot("codex", [{ id: "claude", source: "claude", timestamp: 1, model: "claude", projectKey: "p", usage: { inputTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } }], [], [])).rejects.toThrow("SOURCE_SNAPSHOT_RECORD_MISMATCH");
+  });
 });

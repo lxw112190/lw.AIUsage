@@ -1,8 +1,8 @@
 import type {
-  Collector,
   CollectorContext,
   CollectorDetection,
   CollectorFile,
+  FileCollector,
   FileScanContext,
   FileScanResult,
 } from "../types";
@@ -45,10 +45,11 @@ async function recursiveJsonl(
   }
   return files;
 }
-export class ClaudeCollector implements Collector {
+export class ClaudeCollector implements FileCollector {
   readonly source = "claude" as const;
   readonly name = "Claude Code";
   readonly parserVersion = 4;
+  readonly scanMode = "file" as const;
   readonly fileReconcileMode = "path" as const;
   async roots(context: CollectorContext): Promise<string[]> {
     const home = await context.platform.paths.home();
