@@ -192,7 +192,7 @@ export function sourceNeedsScan(
     if (!cursor) return true;
     if (cursor.parserVersion !== collector.parserVersion) return true;
     if (cursor.size !== file.size || cursor.modifiedAt !== file.modifiedAt) return true;
-    if (cursor.offset < file.size) return true;
+    if (cursor.offset !== file.size || cursor.pendingText !== "") return true;
     if (cursor.logicalId !== file.logicalId) return true;
   }
   return false;
