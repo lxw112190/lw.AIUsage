@@ -151,8 +151,8 @@ describe("Codex v5 accounting engine", () => {
     expect(comparison).toMatchObject({
       relation: "increased",
       basis: "aggregate-cross-schema",
-      previousAggregate: 110,
-      currentAggregate: 150,
+      previousComparableTotal: 110,
+      currentComparableTotal: 150,
       aggregateDelta: 40,
       componentBreakdownExact: false,
     });
@@ -161,6 +161,128 @@ describe("Codex v5 accounting engine", () => {
       diagnostics: { comparisonBasis: "aggregate-cross-schema", componentBreakdownExact: false },
     });
     expect(totalTokens(contribution!.usage)).toBe(40);
+  });
+
+  it("uses the selected input-output basis for both relation and delta", () => {
+    const contribution = deriveTokenCountContribution(
+      event("basis-delta", { total: raw({ input_tokens: 950, output_tokens: 70 }) }),
+      state(raw({ total_tokens: 1_000, input_tokens: 900, output_tokens: 50 })),
+    );
+
+    expect(contribution).toMatchObject({
+      method: "total-delta",
+      diagnostics: { comparisonBasis: "input-output", aggregateDelta: 70, componentBreakdownExact: true },
+    });
+    expect(totalTokens(contribution!.usage)).toBe(70);
+  });
+
+  it("falls back to the explicit aggregate when component delta decreases a primary counter", () => {
+    const contribution = deriveTokenCountContribution(
+      event("explicit-mismatch", { total: raw({ total_tokens: 1_100, input_tokens: 850, output_tokens: 250 }) }),
+      state(raw({ total_tokens: 1_000, input_tokens: 900, output_tokens: 100 })),
+    );
+
+    expect(contribution).toMatchObject({
+      method: "total-aggregate-delta",
+      usage: { inputTokens: 100 },
+      diagnostics: { comparisonBasis: "explicit-total", aggregateDelta: 100, componentBreakdownExact: false },
+    });
+    expect(totalTokens(contribution!.usage)).toBe(100);
+  });
+
+  it("rejects a component candidate whose normalized total disagrees with the basis", () => {
+    const contribution = deriveTokenCountContribution(
+      event("component-mismatch", { total: raw({ total_tokens: 1_100, input_tokens: 870, output_tokens: 150 }) }),
+      state(raw({ total_tokens: 1_000, input_tokens: 800, output_tokens: 100 })),
+    );
+
+    expect(contribution).toMatchObject({
+      method: "total-aggregate-delta",
+      usage: { inputTokens: 100 },
+      diagnostics: {
+        comparisonBasis: "explicit-total",
+        aggregateDelta: 100,
+        componentDeltaTotal: 120,
+        componentConsistencyMismatch: true,
+      },
+    });
+  });
+
+  it("keeps a consistent explicit-total component delta", () => {
+    const contribution = deriveTokenCountContribution(
+      event("component-exact", { total: raw({ total_tokens: 1_100, input_tokens: 980, cached_input_tokens: 320, output_tokens: 120, reasoning_output_tokens: 25 }) }),
+      state(raw({ total_tokens: 1_000, input_tokens: 900, cached_input_tokens: 300, output_tokens: 100, reasoning_output_tokens: 20 })),
+    );
+
+    expect(contribution).toMatchObject({
+      method: "total-delta",
+      usage: { inputTokens: 60, cachedInputTokens: 20, outputTokens: 15, reasoningOutputTokens: 5 },
+      diagnostics: { comparisonBasis: "explicit-total", aggregateDelta: 100, componentBreakdownExact: true, componentConsistencyMismatch: false },
+    });
+    expect(totalTokens(contribution!.usage)).toBe(100);
+  });
+
+  it("uses aggregate total when reset snapshot components are inconsistent", () => {
+    const contribution = deriveTokenCountContribution(
+      event("reset-mismatch", { total: raw({ total_tokens: 100, input_tokens: 70, output_tokens: 10 }) }),
+      state(raw({ total_tokens: 1_000 })),
+    );
+
+    expect(contribution).toMatchObject({
+      method: "total-reset",
+      usage: { inputTokens: 100 },
+      nextState: { segment: 1 },
+      diagnostics: { counterReset: true, componentBreakdownExact: false, componentConsistencyMismatch: true },
+    });
+    expect(totalTokens(contribution!.usage)).toBe(100);
+  });
+
+  it("preserves consistent reset components", () => {
+    const contribution = deriveTokenCountContribution(
+      event("reset-exact", { total: raw({ total_tokens: 100, input_tokens: 80, output_tokens: 20 }) }),
+      state(raw({ total_tokens: 1_000 })),
+    );
+
+    expect(contribution).toMatchObject({
+      method: "total-reset",
+      usage: { inputTokens: 80, outputTokens: 20 },
+      diagnostics: { componentBreakdownExact: true, componentConsistencyMismatch: false },
+    });
+  });
+
+  it("guards initial snapshots and total-only snapshots separately", () => {
+    const inconsistent = deriveTokenCountContribution(
+      event("initial-mismatch", { total: raw({ total_tokens: 100, input_tokens: 70, output_tokens: 20 }) }),
+      state(),
+    );
+    const totalOnly = deriveTokenCountContribution(
+      event("initial-total-only", { total: raw({ total_tokens: 100 }) }),
+      state(),
+    );
+
+    expect(inconsistent).toMatchObject({
+      method: "total-initial",
+      usage: { inputTokens: 100 },
+      diagnostics: { componentBreakdownExact: false, componentConsistencyMismatch: true },
+    });
+    expect(totalOnly).toMatchObject({
+      method: "total-initial",
+      usage: { inputTokens: 100 },
+      diagnostics: { componentBreakdownExact: false, componentConsistencyMismatch: false },
+    });
+  });
+
+  it("keeps last usage primary while exposing snapshot inconsistency", () => {
+    const contribution = deriveTokenCountContribution(
+      event("last-mismatch", { last: raw({ input_tokens: 20 }), total: raw({ total_tokens: 100, input_tokens: 70, output_tokens: 20 }) }),
+      state(),
+    );
+
+    expect(contribution).toMatchObject({
+      method: "last",
+      usage: { inputTokens: 20 },
+      diagnostics: { comparisonBasis: "explicit-total", componentConsistencyMismatch: true },
+    });
   });
 
   it("does not infer duplicate from partial equality", () => {

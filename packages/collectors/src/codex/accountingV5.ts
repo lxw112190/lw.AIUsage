@@ -49,12 +49,14 @@ export type RawCumulativeBasis = "explicit-total" | "input-output" | "aggregate-
 export interface RawCumulativeComparison {
   relation: RawCumulativeRelation;
   basis: RawCumulativeBasis;
-  previousAggregate?: number;
-  currentAggregate?: number;
+  previousComparableTotal?: number;
+  currentComparableTotal?: number;
   aggregateDelta?: number;
   componentCounterDecrease: boolean;
   componentBreakdownExact: boolean;
   rawDelta?: RawTokenUsage;
+  componentDeltaTotal?: number;
+  componentConsistencyMismatch: boolean;
   sameAggregateDifferentComponents: boolean;
 }
 
@@ -80,6 +82,8 @@ export interface AccountingContribution {
     aggregateDelta?: number;
     incomparable: boolean;
     sameAggregateDifferentComponents: boolean;
+    componentDeltaTotal?: number;
+    componentConsistencyMismatch: boolean;
   };
 }
 
@@ -165,6 +169,7 @@ const canDeriveExactComponentDelta = (
 ): boolean => relation === "increased" &&
   rawFieldPresent(current, "input") && rawFieldPresent(previous, "input") &&
   rawFieldPresent(current, "output") && rawFieldPresent(previous, "output") &&
+  !(current.input < previous.input || current.output < previous.output) &&
   secondaryCounterFields.every((field) => rawFieldPresent(current, field) === rawFieldPresent(previous, field)) &&
   !secondaryCounterDecreased(current, previous);
 
@@ -196,6 +201,34 @@ const deriveExactRawComponentDelta = (current: RawTokenUsage, previous: RawToken
   };
 };
 
+interface ComparableCumulativePair {
+  basis: RawCumulativeBasis;
+  previous: number;
+  current: number;
+}
+
+function resolveComparableCumulativePair(
+  current: RawTokenUsage,
+  state: TokenCountState,
+): ComparableCumulativePair | undefined {
+  const previous = state.previousTotalRaw;
+  if (!previous) return undefined;
+  if (current.fieldPresence.total && previous.fieldPresence.total)
+    return { basis: "explicit-total", previous: previous.total, current: current.total };
+  if (current.fieldPresence.input && previous.fieldPresence.input && current.fieldPresence.output && previous.fieldPresence.output)
+    return { basis: "input-output", previous: previous.input + previous.output, current: current.input + current.output };
+  const currentAggregate = effectiveAggregateTotal(current);
+  const previousAggregate = state.previousAggregateTotal ?? effectiveAggregateTotal(previous);
+  if (currentAggregate !== undefined && previousAggregate !== undefined)
+    return { basis: "aggregate-cross-schema", previous: previousAggregate, current: currentAggregate };
+  return undefined;
+}
+
+const hasPrimaryComponentBreakdown = (raw: RawTokenUsage): boolean => raw.fieldPresence.input && raw.fieldPresence.output;
+const componentTotalOf = (raw: RawTokenUsage): number => totalTokens(normalizeRawTokenUsage(raw));
+const snapshotConsistencyMismatch = (raw: RawTokenUsage, expectedAggregate: number | undefined): boolean =>
+  expectedAggregate !== undefined && hasPrimaryComponentBreakdown(raw) && componentTotalOf(raw) !== expectedAggregate;
+
 /** Compares two cumulative snapshots using one explicit, explainable basis. */
 export function compareRawCumulative(
   current: RawTokenUsage,
@@ -203,64 +236,58 @@ export function compareRawCumulative(
 ): RawCumulativeComparison {
   const previous = state.previousTotalRaw;
   const currentAggregate = effectiveAggregateTotal(current);
-  const previousAggregate = state.previousAggregateTotal ?? (previous ? effectiveAggregateTotal(previous) : undefined);
   const componentCounterDecrease = !!previous && secondaryCounterDecreased(current, previous);
   if (!previous) {
     return {
       relation: "initial",
       basis: current.fieldPresence.total ? "explicit-total" : current.fieldPresence.input && current.fieldPresence.output ? "input-output" : "none",
-      currentAggregate,
-      previousAggregate,
+      currentComparableTotal: currentAggregate,
       componentCounterDecrease: false,
       componentBreakdownExact: false,
+      componentConsistencyMismatch: snapshotConsistencyMismatch(current, currentAggregate),
       sameAggregateDifferentComponents: false,
     };
   }
 
-  let relation: RawCumulativeRelation;
-  let basis: RawCumulativeBasis;
-  if (current.fieldPresence.total && previous.fieldPresence.total) {
-    basis = "explicit-total";
-    relation = current.total < previous.total ? "reset" : current.total === previous.total ? "same" : "increased";
-  } else if (current.fieldPresence.input && previous.fieldPresence.input && current.fieldPresence.output && previous.fieldPresence.output) {
-    basis = "input-output";
-    const currentInputOutput = current.input + current.output;
-    const previousInputOutput = previous.input + previous.output;
-    relation = current.input < previous.input || current.output < previous.output
-      ? "reset"
-      : currentInputOutput === previousInputOutput ? "same" : "increased";
-  } else if (currentAggregate !== undefined && previousAggregate !== undefined) {
-    basis = "aggregate-cross-schema";
-    relation = currentAggregate < previousAggregate ? "reset" : currentAggregate === previousAggregate ? "same" : "increased";
-  } else {
+  const pair = resolveComparableCumulativePair(current, state);
+  if (!pair) {
     return {
       relation: "incomparable",
       basis: "none",
-      previousAggregate,
-      currentAggregate,
       componentCounterDecrease,
       componentBreakdownExact: false,
+      componentConsistencyMismatch: false,
       sameAggregateDifferentComponents: false,
     };
   }
 
-  const componentBreakdownExact = canDeriveExactComponentDelta(current, previous, relation);
+  const primaryReset = pair.basis === "input-output" && (current.input < previous.input || current.output < previous.output);
+  const relation: RawCumulativeRelation = primaryReset
+    ? "reset"
+    : pair.current < pair.previous ? "reset" : pair.current === pair.previous ? "same" : "increased";
+  const aggregateDelta = relation === "increased" ? pair.current - pair.previous : undefined;
+  const candidateRawDelta = canDeriveExactComponentDelta(current, previous, relation)
+    ? deriveExactRawComponentDelta(current, previous)
+    : undefined;
+  const componentDeltaTotal = candidateRawDelta ? componentTotalOf(candidateRawDelta) : undefined;
+  const componentBreakdownExact = candidateRawDelta !== undefined && aggregateDelta !== undefined && componentDeltaTotal === aggregateDelta;
   return {
     relation,
-    basis,
-    previousAggregate,
-    currentAggregate,
-    aggregateDelta: relation === "increased" && currentAggregate !== undefined && previousAggregate !== undefined
-      ? currentAggregate - previousAggregate
-      : undefined,
+    basis: pair.basis,
+    previousComparableTotal: pair.previous,
+    currentComparableTotal: pair.current,
+    aggregateDelta,
     componentCounterDecrease,
     componentBreakdownExact,
-    rawDelta: componentBreakdownExact ? deriveExactRawComponentDelta(current, previous) : undefined,
+    rawDelta: componentBreakdownExact ? candidateRawDelta : undefined,
+    componentDeltaTotal,
+    componentConsistencyMismatch: componentDeltaTotal !== undefined && aggregateDelta !== undefined && componentDeltaTotal !== aggregateDelta,
     sameAggregateDifferentComponents: relation === "same" && !sameComponentCounters(current, previous),
   };
 }
 
 const hasTokens = (usage: TokenUsage): boolean => totalTokens(usage) > 0;
+/** Carries a trusted aggregate count through TokenUsage when its component split cannot be proven. */
 const aggregateUsage = (tokens: number): TokenUsage => ({
   inputTokens: Math.max(tokens, 0),
   cachedInputTokens: 0,
@@ -268,6 +295,25 @@ const aggregateUsage = (tokens: number): TokenUsage => ({
   outputTokens: 0,
   reasoningOutputTokens: 0,
 });
+
+interface SnapshotUsageResolution {
+  usage: TokenUsage;
+  componentBreakdownExact: boolean;
+  componentTotal: number;
+  consistencyMismatch: boolean;
+}
+
+function resolveSnapshotUsage(raw: RawTokenUsage, expectedAggregate: number | undefined): SnapshotUsageResolution {
+  const componentUsage = normalizeRawTokenUsage(raw);
+  const componentTotal = totalTokens(componentUsage);
+  if (expectedAggregate === undefined)
+    return { usage: componentUsage, componentBreakdownExact: false, componentTotal, consistencyMismatch: false };
+  if (!hasPrimaryComponentBreakdown(raw))
+    return { usage: aggregateUsage(expectedAggregate), componentBreakdownExact: false, componentTotal, consistencyMismatch: false };
+  if (componentTotal === expectedAggregate)
+    return { usage: componentUsage, componentBreakdownExact: true, componentTotal, consistencyMismatch: false };
+  return { usage: aggregateUsage(expectedAggregate), componentBreakdownExact: false, componentTotal, consistencyMismatch: true };
+}
 
 /** Derives one deterministic TokenCount contribution without consulting a cursor baseline. */
 export function deriveTokenCountContribution(
@@ -284,14 +330,20 @@ export function deriveTokenCountContribution(
 
   let usage: TokenUsage;
   let method: TokenCountAccountingMethod;
+  let componentBreakdownExact = comparison?.componentBreakdownExact ?? false;
+  let componentConsistencyMismatch = comparison?.componentConsistencyMismatch ?? false;
+  let componentDeltaTotal = comparison?.componentDeltaTotal;
   if (lastUsage) {
     usage = lastUsage;
     method = "last";
   } else {
     const relation = comparison?.relation;
     if (relation === "initial") {
-      usage = normalizeRawTokenUsage(tokenCount.total!);
+      const snapshot = resolveSnapshotUsage(tokenCount.total!, comparison?.currentComparableTotal);
+      usage = snapshot.usage;
       method = "total-initial";
+      componentBreakdownExact = snapshot.componentBreakdownExact;
+      componentConsistencyMismatch = snapshot.consistencyMismatch;
     } else if (relation === "same") {
       usage = zeroUsage();
       method = "duplicate-zero";
@@ -301,9 +353,12 @@ export function deriveTokenCountContribution(
     } else if (relation === "increased" && comparison?.aggregateDelta !== undefined) {
       usage = aggregateUsage(comparison.aggregateDelta);
       method = "total-aggregate-delta";
-    } else if (relation === "reset" && comparison?.currentAggregate !== undefined) {
-      usage = normalizeRawTokenUsage(tokenCount.total!);
+    } else if (relation === "reset" && comparison?.currentComparableTotal !== undefined) {
+      const snapshot = resolveSnapshotUsage(tokenCount.total!, comparison.currentComparableTotal);
+      usage = snapshot.usage;
       method = "total-reset";
+      componentBreakdownExact = snapshot.componentBreakdownExact;
+      componentConsistencyMismatch = snapshot.consistencyMismatch;
     } else {
       usage = zeroUsage();
       method = "unresolved";
@@ -325,10 +380,12 @@ export function deriveTokenCountContribution(
       repeatedTotalWithNonZeroLast,
       comparisonBasis: comparison?.basis ?? "none",
       componentCounterDecrease: comparison?.componentCounterDecrease ?? false,
-      componentBreakdownExact: comparison?.componentBreakdownExact ?? false,
+      componentBreakdownExact,
       aggregateDelta: comparison?.aggregateDelta,
       incomparable: comparison?.relation === "incomparable",
       sameAggregateDifferentComponents: comparison?.sameAggregateDifferentComponents ?? false,
+      componentDeltaTotal,
+      componentConsistencyMismatch,
     },
   };
 }
