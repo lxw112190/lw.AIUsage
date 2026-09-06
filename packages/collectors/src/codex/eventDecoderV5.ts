@@ -54,8 +54,6 @@ const firstString = (...values: unknown[]): string | undefined => {
   return undefined;
 };
 
-const firstValue = (...values: unknown[]): unknown => values.find((value) => value !== undefined && value !== null);
-
 const nestedString = (object: Record<string, unknown> | undefined, ...keys: string[]): string | undefined =>
   firstString(...keys.map((key) => object?.[key]));
 
@@ -150,7 +148,13 @@ export function turnIdOf(event: UnknownCodexEvent): string | undefined {
   return firstString(payload.turn_id, payload.turnId, msg?.turn_id, msg?.turnId, event.turn_id, event.turnId);
 }
 
-const decodedUsageOf = (...values: unknown[]) => decodeRawTokenUsage(firstValue(...values));
+const decodedUsageOf = (...values: unknown[]) => {
+  for (const value of values) {
+    const decoded = decodeRawTokenUsage(value);
+    if (decoded) return decoded;
+  }
+  return undefined;
+};
 
 const eventRawIdentity = (event: UnknownCodexEvent, eventIndex: number): string =>
   `e${eventIndex}:h${stableHash(stableJsonStringify(event))}`;

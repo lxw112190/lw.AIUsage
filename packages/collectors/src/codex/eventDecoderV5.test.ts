@@ -102,6 +102,28 @@ describe("Codex v5 event decoder", () => {
     expect(result.diagnostics.payloadUsageEvents).toBe(1);
   });
 
+  it("falls through an invalid usage alias to a later valid alias", () => {
+    const result = decodeCodexFileV5({
+      sourcePath: "/sessions/a.jsonl",
+      values: [{
+        type: "token_count",
+        timestamp: 100,
+        payload: {
+          info: {
+            last_token_usage: { input_tokens: "invalid" },
+            lastTokenUsage: { inputTokens: 10, outputTokens: 2 },
+            total_token_usage: { total_tokens: "invalid" },
+            totalTokenUsage: { totalTokens: 12 },
+          },
+        },
+      }],
+    });
+
+    expect(result.events[0]?.tokenCount?.last?.input).toBe(10);
+    expect(result.events[0]?.tokenCount?.last?.output).toBe(2);
+    expect(result.events[0]?.tokenCount?.total?.total).toBe(12);
+  });
+
   it("uses legacy flat usage only on non-token events and diagnoses nested non-token usage", () => {
     const result = decodeCodexFileV5({
       sourcePath: "/legacy.jsonl",

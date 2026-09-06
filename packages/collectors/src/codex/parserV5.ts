@@ -82,6 +82,13 @@ export interface CodexV5ProjectionDiagnostics {
   duplicateRecordIds: number;
 }
 
+export interface CodexV5SourceIntegrityDiagnostics {
+  files: number;
+  filesWithParseErrors: number;
+  parseErrorCount: number;
+  filesWithPendingText: number;
+}
+
 export interface CodexV5ParserInvariants {
   logicalSessionReconciliation: boolean;
   payloadEvent: boolean;
@@ -93,8 +100,17 @@ export interface CodexV5ParserInvariants {
   uniqueRecordIds: boolean;
 }
 
+export interface CodexV5ActivationGates {
+  sourceIntegrity: boolean;
+  sessionIdentity: boolean;
+  timestampCompleteness: boolean;
+  tokenCountCompleteness: boolean;
+  forkResolution: boolean;
+}
+
 export interface CodexV5ParserDiagnostics {
   decode: CodexV5DecodeDiagnostics;
+  source: CodexV5SourceIntegrityDiagnostics;
   reconcile: CodexLogicalSessionReconcileDiagnosticsV5;
   tokenCount: CodexV5TokenCountDiagnostics;
   payload: PayloadFallbackDiagnostics;
@@ -102,6 +118,7 @@ export interface CodexV5ParserDiagnostics {
   forkReplay: ForkReplayDiagnosticsV5;
   projection: CodexV5ProjectionDiagnostics;
   invariants: CodexV5ParserInvariants;
+  activation: CodexV5ActivationGates;
 }
 
 export interface CodexV5ParseResult {
@@ -245,6 +262,44 @@ const emptyProjectionDiagnostics = (): CodexV5ProjectionDiagnostics => ({
   duplicateRecordIds: 0,
 });
 
+const sourceIntegrityDiagnostics = (
+  files: readonly CodexDecodedFileV5[],
+): CodexV5SourceIntegrityDiagnostics => {
+  let filesWithParseErrors = 0;
+  let parseErrorCount = 0;
+  let filesWithPendingText = 0;
+  for (const file of files) {
+    if (file.parseErrors.length > 0) {
+      filesWithParseErrors += 1;
+      parseErrorCount += file.parseErrors.length;
+    }
+    if (file.hasPendingText) filesWithPendingText += 1;
+  }
+  return { files: files.length, filesWithParseErrors, parseErrorCount, filesWithPendingText };
+};
+
+const buildActivationGates = (
+  source: CodexV5SourceIntegrityDiagnostics,
+  decode: CodexV5DecodeDiagnostics,
+  tokenCount: CodexV5TokenCountDiagnostics,
+  baseline: ForkBaselineDiagnosticsV5,
+  replay: ForkReplayDiagnosticsV5,
+  projection: CodexV5ProjectionDiagnostics,
+): CodexV5ActivationGates => ({
+  sourceIntegrity: source.parseErrorCount === 0 && source.filesWithPendingText === 0,
+  sessionIdentity: decode.sessionIdentityConflicts === 0 && decode.parentIdentityConflicts === 0,
+  timestampCompleteness: projection.missingTimestampContributions === 0 && projection.missingTimestampTokens === 0,
+  tokenCountCompleteness: tokenCount.methods.unresolved === 0,
+  forkResolution: baseline.missingParentSessions === 0 &&
+    baseline.missingForkTimestampSessions === 0 &&
+    baseline.missingParentCheckpointSessions === 0 &&
+    baseline.missingChildTotalTimestampSessions === 0 &&
+    baseline.incomparableBaselineSessions === 0 &&
+    baseline.cycleSessions === 0 &&
+    baseline.conflictingParentSessions === 0 &&
+    replay.replayPrefixMismatchSessions === 0,
+});
+
 const projectUsageRecordsV5 = (
   replaySessions: readonly ForkReplaySessionResultV5[],
 ): { records: UsageRecord[]; diagnostics: CodexV5ProjectionDiagnostics; contributionInvariant: boolean; tokenInvariant: boolean } => {
@@ -374,8 +429,19 @@ export function parseCodexFilesV5(
     projectionToken: projection.tokenInvariant,
     uniqueRecordIds: projection.diagnostics.duplicateRecordIds === 0,
   };
+  const decodeDiagnostics = sumDecodeDiagnostics(decoded);
+  const sourceDiagnostics = sourceIntegrityDiagnostics(decoded);
+  const activation = buildActivationGates(
+    sourceDiagnostics,
+    decodeDiagnostics,
+    tokenDiagnostics,
+    baselinePlan.diagnostics,
+    replay.diagnostics,
+    projection.diagnostics,
+  );
   const diagnostics: CodexV5ParserDiagnostics = {
-    decode: sumDecodeDiagnostics(decoded),
+    decode: decodeDiagnostics,
+    source: sourceDiagnostics,
     reconcile: reconciled.diagnostics,
     tokenCount: tokenDiagnostics,
     payload: payloadDiagnostics,
@@ -383,7 +449,8 @@ export function parseCodexFilesV5(
     forkReplay: replay.diagnostics,
     projection: projection.diagnostics,
     invariants,
+    activation,
   };
-  const safeToActivate = Object.values(invariants).every(Boolean);
+  const safeToActivate = Object.values(invariants).every(Boolean) && Object.values(activation).every(Boolean);
   return { records: projection.records, sessions, diagnostics, safeToActivate };
 }

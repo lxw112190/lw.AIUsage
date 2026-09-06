@@ -7,9 +7,9 @@ const input = (sourcePath: string, values: Record<string, unknown>[], logicalIdH
   values,
 });
 
-const sessionMeta = (id: string, timestamp: number, options: { parent?: string } = {}): Record<string, unknown> => ({
+const sessionMeta = (id: string, timestamp: number | undefined, options: { parent?: string } = {}): Record<string, unknown> => ({
   type: "session_meta",
-  timestamp,
+  ...(timestamp === undefined ? {} : { timestamp }),
   payload: { id, ...(options.parent ? { forked_from_id: options.parent } : {}) },
 });
 
@@ -74,6 +74,57 @@ describe("Codex v5 parser pipeline", () => {
     expect(result.diagnostics.projection.missingTimestampTokens).toBe(100);
     expect(result.diagnostics.projection.emittedTokens).toBe(50);
     expect(result.diagnostics.invariants.projectionToken).toBe(true);
+    expect(result.diagnostics.activation.timestampCompleteness).toBe(false);
+    expect(result.safeToActivate).toBe(false);
+  });
+
+  it("does not block activation for an untimestamped non-usage event", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/a.jsonl", [
+        sessionMeta("a", 100),
+        { type: "response_item", payload: { text: "ignored" } },
+        tokenCount(110, { input_tokens: 10, output_tokens: 2 }, { model: "gpt-5" }),
+      ]),
+    ]);
+
+    expect(result.diagnostics.decode.missingTimestampEvents).toBeGreaterThan(0);
+    expect(result.diagnostics.activation.timestampCompleteness).toBe(true);
+  });
+
+  it("blocks activation when source JSONL has parse errors", () => {
+    const result = parseCodexFilesV5([{
+      sourcePath: "/sessions/a.jsonl",
+      values: [sessionMeta("a", 100), tokenCount(110, { input_tokens: 10, output_tokens: 0 })],
+      parseErrors: ["invalid json line"],
+    }]);
+
+    expect(result.records).toHaveLength(1);
+    expect(result.diagnostics.source).toMatchObject({ files: 1, filesWithParseErrors: 1, parseErrorCount: 1 });
+    expect(result.diagnostics.activation.sourceIntegrity).toBe(false);
+    expect(result.safeToActivate).toBe(false);
+  });
+
+  it("blocks activation when a source file ends with pending JSONL text", () => {
+    const result = parseCodexFilesV5([{
+      sourcePath: "/sessions/a.jsonl",
+      values: [sessionMeta("a", 100)],
+      hasPendingText: true,
+    }]);
+
+    expect(result.diagnostics.source.filesWithPendingText).toBe(1);
+    expect(result.diagnostics.activation.sourceIntegrity).toBe(false);
+    expect(result.safeToActivate).toBe(false);
+  });
+
+  it("blocks activation when session identity conflicts with the logical hint", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/a.jsonl", [sessionMeta("actual", 100), tokenCount(110, { input_tokens: 10, output_tokens: 0 })], "hinted-other-session"),
+    ]);
+
+    expect(result.records).toHaveLength(1);
+    expect(result.diagnostics.decode.sessionIdentityConflicts).toBe(1);
+    expect(result.diagnostics.activation.sessionIdentity).toBe(false);
+    expect(result.safeToActivate).toBe(false);
   });
 
   it("canonicalizes same-event token_count and payload usage only once", () => {
@@ -164,6 +215,86 @@ describe("Codex v5 parser pipeline", () => {
     expect(child?.canonicalAfterForkReplay).toHaveLength(1);
     expect(child?.canonicalAfterForkReplay[0]?.usage.inputTokens).toBe(30);
     expect(result.diagnostics.forkReplay.replaySuppressedEvents).toBe(2);
+  });
+
+  it("blocks activation for a missing fork parent", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/child.jsonl", [
+        sessionMeta("child", 200, { parent: "missing-parent" }),
+        tokenCount(210, {}, { total: { total_tokens: 20 } }),
+      ]),
+    ]);
+
+    expect(result.records).toHaveLength(1);
+    expect(result.diagnostics.forkBaseline.missingParentSessions).toBe(1);
+    expect(result.diagnostics.activation.forkResolution).toBe(false);
+    expect(result.safeToActivate).toBe(false);
+  });
+
+  it("blocks activation for a fork without a deterministic fork timestamp", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/parent.jsonl", [sessionMeta("parent", 100), tokenCount(110, {}, { total: { total_tokens: 10 } })]),
+      input("/sessions/child.jsonl", [sessionMeta("child", undefined, { parent: "parent" }), tokenCount(210, {}, { total: { total_tokens: 20 } })]),
+    ]);
+
+    expect(result.diagnostics.forkBaseline.missingForkTimestampSessions).toBe(1);
+    expect(result.diagnostics.activation.forkResolution).toBe(false);
+    expect(result.safeToActivate).toBe(false);
+  });
+
+  it("blocks activation when fork replay identity diverges after a matching prefix", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/parent.jsonl", [
+        sessionMeta("parent", 50),
+        tokenCount(100, { input_tokens: 10, output_tokens: 0 }, { responseId: "a" }),
+        tokenCount(200, { input_tokens: 20, output_tokens: 0 }, { responseId: "b" }),
+      ]),
+      input("/sessions/child.jsonl", [
+        sessionMeta("child", 300, { parent: "parent" }),
+        tokenCount(100, { input_tokens: 10, output_tokens: 0 }, { responseId: "a" }),
+        tokenCount(200, { input_tokens: 99, output_tokens: 0 }, { responseId: "x" }),
+        tokenCount(300, { input_tokens: 30, output_tokens: 0 }, { responseId: "c" }),
+      ]),
+    ]);
+
+    expect(result.diagnostics.forkReplay.replaySuppressedEvents).toBe(1);
+    expect(result.diagnostics.forkReplay.replayPrefixMismatchSessions).toBe(1);
+    expect(result.diagnostics.invariants.forkContribution).toBe(true);
+    expect(result.diagnostics.invariants.forkToken).toBe(true);
+    expect(result.diagnostics.activation.forkResolution).toBe(false);
+    expect(result.safeToActivate).toBe(false);
+  });
+
+  it("blocks activation when a TokenCount contribution is unresolved", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/a.jsonl", [
+        sessionMeta("a", 100),
+        {
+          type: "token_count",
+          timestamp: 110,
+          payload: { info: { total_token_usage: { cached_input_tokens: 10 } } },
+        },
+        {
+          type: "token_count",
+          timestamp: 120,
+          payload: { info: { total_token_usage: { output_tokens: 2 } } },
+        },
+      ]),
+    ]);
+
+    expect(result.diagnostics.tokenCount.methods.unresolved).toBe(1);
+    expect(result.diagnostics.activation.tokenCountCompleteness).toBe(false);
+    expect(result.safeToActivate).toBe(false);
+  });
+
+  it("keeps a deterministic child counter reset activatable", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/parent.jsonl", [sessionMeta("parent", 100), tokenCount(150, {}, { total: { total_tokens: 150 } })]),
+      input("/sessions/child.jsonl", [sessionMeta("child", 200, { parent: "parent" }), tokenCount(210, {}, { total: { total_tokens: 20 } })]),
+    ]);
+
+    expect(result.diagnostics.forkBaseline.counterResetAtForkSessions).toBe(1);
+    expect(result.diagnostics.activation.forkResolution).toBe(true);
   });
 
   it("rejects divergent logical files and orphan files from activation", () => {
