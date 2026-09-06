@@ -186,4 +186,23 @@ describe("Codex v5 event decoder", () => {
     expect(result.diagnostics.sessionIdentityConflicts).toBe(0);
     expect(result.events.every((event) => event.sessionId === "child")).toBe(true);
   });
+
+  it("keeps the child parent when nested parent metadata replays a grandparent", () => {
+    const result = decodeCodexFileV5({
+      sourcePath: "/nested-child.jsonl",
+      values: [
+        { type: "session_meta", timestamp: 100, payload: { id: "child", forked_from_id: "parent" } },
+        { type: "session_meta", timestamp: 200, payload: { id: "parent", forked_from_id: "grandparent" } },
+        { type: "session_meta", timestamp: 250, payload: { id: "grandparent", forked_from_id: "root" } },
+        { type: "token_count", timestamp: 300, payload: { info: { last_token_usage: { input_tokens: 3 } } } },
+      ],
+    });
+
+    expect(result.sessionId).toBe("child");
+    expect(result.parentSessionId).toBe("parent");
+    expect(result.forkTimestamp).toBe(100_000);
+    expect(result.diagnostics.sessionIdentityConflicts).toBe(0);
+    expect(result.diagnostics.parentIdentityConflicts).toBe(0);
+    expect(result.events.every((event) => event.sessionId === "child" && event.parentSessionId === "parent")).toBe(true);
+  });
 });

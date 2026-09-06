@@ -62,6 +62,8 @@ export interface CodexEventComparisonV5 {
     sourceKind: CodexUsageSource;
     usage: TokenUsage;
     total: number;
+    mappingKind: CodexV4MappingKind;
+    mappingCandidateCount: number;
   };
   v5: {
     beforeFork: CanonicalUsageContributionV5[];
@@ -102,9 +104,97 @@ export interface CodexSessionComparisonV5 {
 export interface CodexV4MappingDiagnostics {
   records: number;
   mappedRecords: number;
+  uniqueRecords: number;
+  resolvedByMetadataRecords: number;
+  equivalentCollisionRecords: number;
+  equivalentCollisionOccurrences: number;
   unmappedRecords: number;
   ambiguousRecords: number;
+  ambiguousUsageUniqueMatchRecords: number;
+  ambiguousUsageNoMatchRecords: number;
+  ambiguousUsageMultipleMatchRecords: number;
   candidateIdCollisions: number;
+  ambiguousExamples: CodexV4MappingEvidence[];
+  equivalentCollisionExamples: CodexV4MappingEvidence[];
+}
+
+export type CodexV4MappingKind =
+  | "unique"
+  | "resolved-metadata"
+  | "equivalent-collision"
+  | "unmapped"
+  | "ambiguous";
+
+export interface CodexV4Candidate {
+  recordId: string;
+  identityKey: string;
+  sessionId: string;
+  rawIdentity: string;
+  rawContentFingerprint: string;
+  sourcePath: string;
+  eventIndex: number;
+  timestamp?: number;
+  sourceKind?: CodexUsageSource;
+  semanticType?: string;
+}
+
+export type CodexV4CandidateForkPosition = "before-fork" | "after-fork" | "both" | "none";
+
+export interface CodexV4CandidateEvidence extends CodexV4Candidate {
+  v5AfterForkUsage: TokenUsage;
+  v5AfterForkTotal: number;
+  v4UsageMatchesAfterFork: boolean;
+  forkPosition: CodexV4CandidateForkPosition;
+}
+
+export interface CodexV4MappingEvidence {
+  recordId: string;
+  mappingKind: CodexV4MappingKind;
+  candidateCount: number;
+  sessionId?: string;
+  timestamp?: number;
+  sourceKind: CodexUsageSource;
+  total: number;
+  usageMatchCandidates: number;
+  candidates: CodexV4CandidateEvidence[];
+}
+
+export interface CodexForkPairComparison {
+  parentSessionId: string;
+  childSessionId: string;
+  forkTimestamp?: number;
+  baselineStatus: string;
+  v4ParentRecords: number;
+  v4ChildRecords: number;
+  v4ParentTokens: number;
+  v4ChildTokens: number;
+  v4FamilyTokens: number;
+  v5ParentContributions: number;
+  v5ChildContributions: number;
+  v5ParentTokens: number;
+  v5ChildTokens: number;
+  v5FamilyTokens: number;
+  parentDelta: number;
+  childDelta: number;
+  familyDelta: number;
+  unexplainedEvents: number;
+  unexplainedDelta: number;
+  ambiguousV4Records: number;
+  equivalentCollisionRecords: number;
+  rawDuplicateGroups: number;
+  rawDuplicateCandidateTokens: number;
+  residualIfDuplicatesSuppressed: number;
+  replaySuppressedEvents: number;
+  replaySuppressedTokens: number;
+}
+
+export interface CodexForkEvidenceSummary {
+  forkPairCount: number;
+  unexplainedEventsInsideForkFamilies: number;
+  unexplainedDeltaInsideForkFamilies: number;
+  unexplainedEventsOutsideForkFamilies: number;
+  unexplainedDeltaOutsideForkFamilies: number;
+  pairs: CodexForkPairComparison[];
 }
 
 export interface CodexComparisonUniverse {
@@ -180,7 +270,7 @@ export interface CodexV4V5ComparisonGates {
 }
 
 export interface CodexV4V5ComparisonReport {
-  comparatorVersion: 2;
+  comparatorVersion: 3;
   snapshot: { files: number };
   universe: CodexComparisonUniverse;
   v4: {
@@ -200,6 +290,7 @@ export interface CodexV4V5ComparisonReport {
   };
   conflicts: CodexLogicalSessionConflictSummaryV5[];
   rawContentDuplicates: CodexRawContentDuplicateSummaryV5;
+  forkEvidence: CodexForkEvidenceSummary;
   difference: {
     components: SignedTokenUsage;
     accountingTokens: number;
@@ -283,11 +374,10 @@ const rawUsageOf = (event: CodexExtractedEvent): number =>
     total: 0,
   });
 
-const rawContentDuplicatesOf = (
+const rawContentDuplicateGroupsOf = (
   files: readonly CodexExtractedFile[],
-  limit: number,
   comparisonEntries: readonly CodexEventComparisonV5[] = [],
-): CodexRawContentDuplicateSummaryV5 => {
+): CodexRawContentDuplicateGroupV5[] => {
   const groups = new Map<string, CodexRawContentDuplicateGroupV5>();
   for (const file of files) {
     for (const event of file.events) {
@@ -318,7 +408,7 @@ const rawContentDuplicatesOf = (
       });
     }
   }
-  const duplicateGroups = [...groups.values()]
+  return [...groups.values()]
     .filter((group) => group.occurrences > 1)
     .map((group) => {
       const eventIndexes = [...group.eventIndexes].sort((left, right) => left - right);
@@ -340,6 +430,12 @@ const rawContentDuplicatesOf = (
       (right.aggregateTokens * (right.occurrences - 1)) - (left.aggregateTokens * (left.occurrences - 1)) ||
       left.sessionId.localeCompare(right.sessionId) ||
       left.rawContentFingerprint.localeCompare(right.rawContentFingerprint));
+};
+
+const rawContentDuplicatesOf = (
+  duplicateGroups: readonly CodexRawContentDuplicateGroupV5[],
+  limit: number,
+): CodexRawContentDuplicateSummaryV5 => {
   return {
     groups: duplicateGroups.length,
     duplicateOccurrences: duplicateGroups.reduce((sum, group) => sum + group.occurrences - 1, 0),
@@ -454,6 +550,8 @@ interface EntryAccumulator {
   timestamp?: number;
   semanticType?: string;
   source?: CodexUsageSource;
+  mappingKind?: CodexV4MappingKind;
+  mappingCandidateCount?: number;
   v4Records: ParserV4MirrorRecord[];
   beforeFork: CanonicalUsageContributionV5[];
   afterFork: CanonicalUsageContributionV5[];
@@ -517,24 +615,105 @@ const buildV4Mapping = (
   files: readonly CodexExtractedFile[],
   v4: ReturnType<typeof replayCodexV4>,
   entries: Map<string, EntryAccumulator>,
+  evidenceLimit: number,
 ): CodexV4MappingDiagnostics => {
-  const candidates = new Map<string, Set<string>>();
+  const candidates = new Map<string, CodexV4Candidate[]>();
   const eventByKey = recordMetadataOf(files);
   for (const file of files) for (const event of file.events) {
     const candidateId = v4CandidateRecordId(file, event);
     const identityKey = comparisonEventKey(eventSessionId(file, event), rawIdentityOf(event));
-    const set = candidates.get(candidateId) ?? new Set<string>();
-    set.add(identityKey);
-    candidates.set(candidateId, set);
+    const eventTimestamp = event.explicitTimestamp;
+    const candidate: CodexV4Candidate = {
+      recordId: candidateId,
+      identityKey,
+      sessionId: eventSessionId(file, event),
+      rawIdentity: rawIdentityOf(event),
+      rawContentFingerprint: stableHash(stableCodexEventJsonV5(event.raw)),
+      sourcePath: file.entry.path,
+      eventIndex: event.eventIndex,
+      timestamp: eventTimestamp,
+      sourceKind: event.source,
+      semanticType: event.semanticType,
+    };
+    const list = candidates.get(candidateId) ?? [];
+    if (!list.some((item) => item.identityKey === identityKey)) list.push(candidate);
+    candidates.set(candidateId, list);
   }
   let candidateIdCollisions = 0;
-  for (const identities of candidates.values()) if (identities.size > 1) candidateIdCollisions += 1;
+  for (const identities of candidates.values()) if (identities.length > 1) candidateIdCollisions += 1;
   let mappedRecords = 0;
+  let uniqueRecords = 0;
+  let resolvedByMetadataRecords = 0;
+  let equivalentCollisionRecords = 0;
+  let equivalentCollisionOccurrences = 0;
   let unmappedRecords = 0;
   let ambiguousRecords = 0;
+  let ambiguousUsageUniqueMatchRecords = 0;
+  let ambiguousUsageNoMatchRecords = 0;
+  let ambiguousUsageMultipleMatchRecords = 0;
+  const ambiguousExamples: CodexV4MappingEvidence[] = [];
+  const equivalentCollisionExamples: CodexV4MappingEvidence[] = [];
+  const attachRecord = (candidate: CodexV4Candidate, record: ParserV4MirrorRecord, mappingKind: CodexV4MappingKind, candidateCount: number): void => {
+    const event = eventByKey.get(candidate.identityKey);
+    const entry = event ? ensureEntry(entries, candidate.sessionId, event) : entries.get(candidate.identityKey);
+    if (!entry) return;
+    entry.v4Records.push(record);
+    entry.mappingKind = mappingKind;
+    entry.mappingCandidateCount = candidateCount;
+  };
+  const evidenceOf = (record: ParserV4MirrorRecord, mappingKind: CodexV4MappingKind, selected: readonly CodexV4Candidate[]): CodexV4MappingEvidence => {
+    const candidates = selected.map((candidate): CodexV4CandidateEvidence => {
+      const entry = entries.get(candidate.identityKey);
+      const afterForkUsage = entry ? usageOf(entry.afterFork) : zeroUsage();
+      const hasBeforeFork = !!entry && entry.beforeFork.length > 0;
+      const hasAfterFork = !!entry && entry.afterFork.length > 0;
+      return {
+        ...candidate,
+        v5AfterForkUsage: afterForkUsage,
+        v5AfterForkTotal: totalTokens(afterForkUsage),
+        v4UsageMatchesAfterFork: usageEqual(record.usage, afterForkUsage),
+        forkPosition: hasBeforeFork && hasAfterFork ? "both" : hasBeforeFork ? "before-fork" : hasAfterFork ? "after-fork" : "none",
+      };
+    });
+    return {
+      recordId: record.id,
+      mappingKind,
+      candidateCount: selected.length,
+      sessionId: record.sessionId,
+      timestamp: record.timestamp,
+      sourceKind: record.sourceKind,
+      total: totalTokens(record.usage),
+      usageMatchCandidates: candidates.filter((candidate) => candidate.v4UsageMatchesAfterFork).length,
+      candidates,
+    };
+  };
+  const narrow = (record: ParserV4MirrorRecord, values: readonly CodexV4Candidate[]): CodexV4Candidate[] => {
+    let remaining = [...values];
+    if (record.sessionId) {
+      const matched = remaining.filter((candidate) => candidate.sessionId === record.sessionId);
+      if (matched.length > 0) remaining = matched;
+    }
+    const timestampMatched = remaining.filter((candidate) => candidate.timestamp === record.timestamp);
+    if (timestampMatched.length > 0) remaining = timestampMatched;
+    const sourceMatched = remaining.filter((candidate) => candidate.sourceKind === record.sourceKind);
+    if (sourceMatched.length > 0) remaining = sourceMatched;
+    return remaining;
+  };
+  const equivalentForComparison = (values: readonly CodexV4Candidate[]): boolean => {
+    if (values.length < 2) return false;
+    const fingerprints = new Set(values.map((candidate) => candidate.rawContentFingerprint));
+    if (fingerprints.size !== 1) return false;
+    const first = values[0]!;
+    if (!values.every((candidate) => candidate.sessionId === first.sessionId && candidate.timestamp === first.timestamp && candidate.sourceKind === first.sourceKind && candidate.semanticType === first.semanticType)) return false;
+    const usages = values.map((candidate) => {
+      const entry = entries.get(candidate.identityKey);
+      return entry && entry.afterFork.length > 0 ? usageOf(entry.afterFork) : undefined;
+    });
+    return usages.every((usage): usage is TokenUsage => !!usage) && usages.slice(1).every((usage) => usageEqual(usages[0]!, usage));
+  };
   for (const [recordId, record] of v4.records) {
-    const identities = candidates.get(recordId);
-    if (!identities || identities.size === 0) {
+    const recordCandidates = candidates.get(recordId) ?? [];
+    if (recordCandidates.length === 0) {
       unmappedRecords += 1;
       const key = `v4-only\n${recordId}`;
       entries.set(key, {
@@ -544,13 +723,33 @@ const buildV4Mapping = (
         eventIndex: -1,
         timestamp: record.timestamp,
         v4Records: [record],
+        mappingKind: "unmapped",
+        mappingCandidateCount: 0,
         beforeFork: [],
         afterFork: [],
         payloadFallbacks: [],
       });
       continue;
     }
-    if (identities.size > 1) {
+    const remaining = narrow(record, recordCandidates);
+    if (remaining.length === 1) {
+      const mappingKind: CodexV4MappingKind = recordCandidates.length === 1 ? "unique" : "resolved-metadata";
+      attachRecord(remaining[0]!, record, mappingKind, recordCandidates.length);
+      mappedRecords += 1;
+      if (mappingKind === "unique") uniqueRecords += 1;
+      else resolvedByMetadataRecords += 1;
+      continue;
+    }
+    if (remaining.length > 1 && equivalentForComparison(remaining)) {
+      const representative = [...remaining].sort((left, right) => left.eventIndex - right.eventIndex || left.rawIdentity.localeCompare(right.rawIdentity))[0]!;
+      attachRecord(representative, record, "equivalent-collision", remaining.length);
+      mappedRecords += 1;
+      equivalentCollisionRecords += 1;
+      equivalentCollisionOccurrences += remaining.length - 1;
+      if (equivalentCollisionExamples.length < evidenceLimit) equivalentCollisionExamples.push(evidenceOf(record, "equivalent-collision", remaining));
+      continue;
+    }
+    {
       ambiguousRecords += 1;
       const key = `v4-ambiguous\n${recordId}`;
       entries.set(key, {
@@ -560,19 +759,36 @@ const buildV4Mapping = (
         eventIndex: -1,
         timestamp: record.timestamp,
         v4Records: [record],
+        mappingKind: "ambiguous",
+        mappingCandidateCount: remaining.length,
         beforeFork: [],
         afterFork: [],
         payloadFallbacks: [],
       });
+      const evidence = evidenceOf(record, "ambiguous", remaining);
+      if (evidence.usageMatchCandidates === 1) ambiguousUsageUniqueMatchRecords += 1;
+      else if (evidence.usageMatchCandidates === 0) ambiguousUsageNoMatchRecords += 1;
+      else ambiguousUsageMultipleMatchRecords += 1;
+      if (ambiguousExamples.length < evidenceLimit) ambiguousExamples.push(evidence);
       continue;
     }
-    const identityKey = [...identities][0]!;
-    const event = eventByKey.get(identityKey);
-    const entry = event ? ensureEntry(entries, identityKey.split("\n")[0]!, event) : entries.get(identityKey);
-    if (entry) entry.v4Records.push(record);
-    mappedRecords += 1;
   }
-  return { records: v4.records.size, mappedRecords, unmappedRecords, ambiguousRecords, candidateIdCollisions };
+  return {
+    records: v4.records.size,
+    mappedRecords,
+    uniqueRecords,
+    resolvedByMetadataRecords,
+    equivalentCollisionRecords,
+    equivalentCollisionOccurrences,
+    unmappedRecords,
+    ambiguousRecords,
+    ambiguousUsageUniqueMatchRecords,
+    ambiguousUsageNoMatchRecords,
+    ambiguousUsageMultipleMatchRecords,
+    candidateIdCollisions,
+    ambiguousExamples,
+    equivalentCollisionExamples,
+  };
 };
 
 interface CodexComparatorEvidenceContext {
@@ -700,6 +916,80 @@ const resolveAttribution = (
   return { reason: "unexplained", explained: false };
 };
 
+const changedAndUnexplained = (entry: CodexEventComparisonV5): boolean =>
+  !entry.explained && (entry.delta !== 0 || signedNonZero(entry.componentDelta));
+
+const forkEvidenceOf = (
+  sessions: readonly CodexSessionComparisonV5[],
+  v5: CodexV5ParseResult,
+  evidence: CodexComparatorEvidenceContext,
+  entries: readonly CodexEventComparisonV5[],
+  duplicateGroups: readonly CodexRawContentDuplicateGroupV5[],
+): CodexForkEvidenceSummary => {
+  const sessionById = new Map(sessions.map((session) => [session.sessionId, session]));
+  const v5SessionById = new Map(v5.sessions.map((session) => [session.sessionId, session]));
+  const pairs: CodexForkPairComparison[] = [];
+  for (const child of evidence.reconciled.sessions) {
+    if (!child.parentSessionId) continue;
+    const parent = sessionById.get(child.parentSessionId);
+    const childSummary = sessionById.get(child.sessionId);
+    const parentV5 = v5SessionById.get(child.parentSessionId);
+    const childV5 = v5SessionById.get(child.sessionId);
+    if (!parent || !childSummary || !parentV5 || !childV5) continue;
+    const familyIds = new Set([parent.sessionId, child.sessionId]);
+    const familyEntries = entries.filter((entry) => familyIds.has(entry.sessionId));
+    const unexplained = familyEntries.filter(changedAndUnexplained);
+    const groups = duplicateGroups.filter((group) => familyIds.has(group.sessionId));
+    const suppressions = [...evidence.forkReplaySuppressions.entries()]
+      .filter(([key]) => key.startsWith(`${child.sessionId}\n`))
+      .flatMap(([, values]) => values);
+    const parentDelta = parent.delta;
+    const childDelta = childSummary.delta;
+    const rawDuplicateCandidateTokens = groups.reduce((sum, group) => sum + group.aggregateTokens * (group.occurrences - 1), 0);
+    pairs.push({
+      parentSessionId: parent.sessionId,
+      childSessionId: childSummary.sessionId,
+      forkTimestamp: child.forkTimestamp,
+      baselineStatus: evidence.baselines.get(child.sessionId)?.status ?? "unresolved",
+      v4ParentRecords: parent.v4Records,
+      v4ChildRecords: childSummary.v4Records,
+      v4ParentTokens: parent.v4Tokens,
+      v4ChildTokens: childSummary.v4Tokens,
+      v4FamilyTokens: parent.v4Tokens + childSummary.v4Tokens,
+      v5ParentContributions: parentV5.canonicalAfterForkReplay.length,
+      v5ChildContributions: childV5.canonicalAfterForkReplay.length,
+      v5ParentTokens: parent.v5Tokens,
+      v5ChildTokens: childSummary.v5Tokens,
+      v5FamilyTokens: parent.v5Tokens + childSummary.v5Tokens,
+      parentDelta,
+      childDelta,
+      familyDelta: parentDelta + childDelta,
+      unexplainedEvents: unexplained.length,
+      unexplainedDelta: unexplained.reduce((sum, entry) => sum + entry.delta, 0),
+      ambiguousV4Records: familyEntries.filter((entry) => entry.v4?.mappingKind === "ambiguous").reduce((sum, entry) => sum + (entry.v4 ? 1 : 0), 0),
+      equivalentCollisionRecords: familyEntries.filter((entry) => entry.v4?.mappingKind === "equivalent-collision").reduce((sum, entry) => sum + (entry.v4 ? 1 : 0), 0),
+      rawDuplicateGroups: groups.length,
+      rawDuplicateCandidateTokens,
+      residualIfDuplicatesSuppressed: parentDelta + childDelta - rawDuplicateCandidateTokens,
+      replaySuppressedEvents: suppressions.length,
+      replaySuppressedTokens: suppressions.reduce((sum, suppression) => sum + suppression.suppressedTokens, 0),
+    });
+  }
+  pairs.sort((left, right) => Math.abs(right.familyDelta) - Math.abs(left.familyDelta) || left.childSessionId.localeCompare(right.childSessionId));
+  const familySessionIds = new Set(pairs.flatMap((pair) => [pair.parentSessionId, pair.childSessionId]));
+  const unexplainedEntries = entries.filter(changedAndUnexplained);
+  const inside = unexplainedEntries.filter((entry) => familySessionIds.has(entry.sessionId));
+  const outside = unexplainedEntries.filter((entry) => !familySessionIds.has(entry.sessionId));
+  return {
+    forkPairCount: pairs.length,
+    unexplainedEventsInsideForkFamilies: inside.length,
+    unexplainedDeltaInsideForkFamilies: inside.reduce((sum, entry) => sum + entry.delta, 0),
+    unexplainedEventsOutsideForkFamilies: outside.length,
+    unexplainedDeltaOutsideForkFamilies: outside.reduce((sum, entry) => sum + entry.delta, 0),
+    pairs,
+  };
+};
+
 const summaryFor = (entries: readonly CodexEventComparisonV5[]): CodexDeltaReasonSummary[] => reasons.map((reason) => {
   const selected = entries.filter((entry) => entry.reason === reason);
   const v4Tokens = selected.reduce((sum, entry) => sum + (entry.v4?.total ?? 0), 0);
@@ -714,6 +1004,7 @@ export function compareCodexV4V5(
   files: readonly CodexExtractedFile[],
   options: CodexV4V5ComparatorOptions = {},
 ): CodexV4V5ComparisonReport {
+  const limit = Math.max(0, options.detailLimit ?? 20);
   const v4 = replayCodexV4(files);
   const v5 = parseCodexFilesV5(codexExtractedFilesToV5Inputs(files));
   const evidence = buildComparatorEvidenceContext(files, v5);
@@ -731,7 +1022,7 @@ export function compareCodexV4V5(
       entry.payloadFallbacks.push(fallback);
     }
   }
-  const mapping = buildV4Mapping(files, v4, entries);
+  const mapping = buildV4Mapping(files, v4, entries, limit);
   for (const entry of entries.values()) if (!entry.source) entry.source = sourceByKey.get(entry.key)?.source;
   const comparisonEntries: CodexEventComparisonV5[] = [...entries.values()].map((entry) => {
     const v4Usage = zeroUsage();
@@ -753,6 +1044,8 @@ export function compareCodexV4V5(
         sourceKind: entry.v4Records[0]!.sourceKind,
         usage: v4Usage,
         total: totalTokens(v4Usage),
+        mappingKind: entry.mappingKind ?? "unique",
+        mappingCandidateCount: entry.mappingCandidateCount ?? 1,
       } : undefined,
       v5: {
         beforeFork: entry.beforeFork,
@@ -820,14 +1113,15 @@ export function compareCodexV4V5(
     attributionComplete,
     accountingBalanced,
   };
-  const limit = Math.max(0, options.detailLimit ?? 20);
   const v5Diagnostics = v5DiagnosticsSummaryOf(v5.diagnostics);
   const conflicts = v5Diagnostics.reconcile.conflicts;
-  const rawContentDuplicates = rawContentDuplicatesOf(files, limit, comparisonEntries);
+  const duplicateGroups = rawContentDuplicateGroupsOf(files, comparisonEntries);
+  const rawContentDuplicates = rawContentDuplicatesOf(duplicateGroups, limit);
+  const forkEvidence = forkEvidenceOf(sessions, v5, evidence, comparisonEntries, duplicateGroups);
   const examplesByReason = emptyExamples();
   for (const reason of reasons) examplesByReason[reason] = comparisonEntries.filter((entry) => entry.reason === reason).slice().sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.key.localeCompare(right.key)).slice(0, limit);
   return {
-    comparatorVersion: 2,
+    comparatorVersion: 3,
     snapshot: { files: files.length },
     universe,
     v4: { recordCount: v4.recordCount, sessionCount: v4.sessionCount, usage: v4.usage, totalTokens: totalTokens(v4.usage) },
@@ -842,6 +1136,7 @@ export function compareCodexV4V5(
     },
     conflicts,
     rawContentDuplicates,
+    forkEvidence,
     difference: { components, accountingTokens, projectionTokens: v5.diagnostics.projection.emittedTokens - totalTokens(canonicalUsage) },
     attribution: {
       byReason,

@@ -190,6 +190,25 @@ async function runRawAudit(): Promise<void> {
             {{ reasonLabel(item.reason) }}: {{ formatTokens(item.delta) }} Token / {{ item.events.toLocaleString() }}
           </span>
         </div>
+        <h3 class="audit-subheading">{{ t("settings.v5MappingEvidence") }}</h3>
+        <div class="audit-breakdown">
+          <span>{{ t("settings.v5MappingUnique") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.uniqueRecords.toLocaleString() }}</span>
+          <span>{{ t("settings.v5MappingMetadata") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.resolvedByMetadataRecords.toLocaleString() }}</span>
+          <span>{{ t("settings.v5MappingEquivalent") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.equivalentCollisionRecords.toLocaleString() }}</span>
+          <span>{{ t("settings.v5MappingAmbiguous") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.ambiguousRecords.toLocaleString() }}</span>
+          <span>{{ t("settings.v5MappingUsageUnique") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.ambiguousUsageUniqueMatchRecords.toLocaleString() }}</span>
+          <span>{{ t("settings.v5MappingUsageNone") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.ambiguousUsageNoMatchRecords.toLocaleString() }}</span>
+          <span>{{ t("settings.v5MappingUsageMultiple") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.ambiguousUsageMultipleMatchRecords.toLocaleString() }}</span>
+        </div>
+        <h3 class="audit-subheading">{{ t("settings.v5ForkEvidence") }}</h3>
+        <div class="audit-breakdown">
+          <span>{{ t("settings.v5ForkPairs") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.forkEvidence.forkPairCount.toLocaleString() }}</span>
+          <span>{{ t("settings.v5ForkInside") }}: {{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.forkEvidence.unexplainedDeltaInsideForkFamilies) }} Token / {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.forkEvidence.unexplainedEventsInsideForkFamilies.toLocaleString() }}</span>
+          <span>{{ t("settings.v5ForkOutside") }}: {{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.forkEvidence.unexplainedDeltaOutsideForkFamilies) }} Token / {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.forkEvidence.unexplainedEventsOutsideForkFamilies.toLocaleString() }}</span>
+          <span v-for="pair in usage.codexAccountingAuditReport.v5MigrationValidation.comparison.forkEvidence.pairs.slice(0, 5)" :key="`${pair.parentSessionId}-${pair.childSessionId}`">
+            {{ pair.parentSessionId.slice(0, 8) }} → {{ pair.childSessionId.slice(0, 8) }}: {{ t("settings.v5ForkFamilyDelta") }} {{ formatTokens(pair.familyDelta) }} Token / {{ t("settings.v5ForkResidual") }} {{ formatTokens(pair.residualIfDuplicatesSuppressed) }} Token
+          </span>
+        </div>
         <h3 class="audit-subheading">{{ t("settings.v5Diagnostics") }}</h3>
         <div class="audit-summary">
           <span>{{ t("settings.v5ParseErrors") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.source.filesWithParseErrors.toLocaleString() }} / {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.diagnostics.source.parseErrorCount.toLocaleString() }}</strong>

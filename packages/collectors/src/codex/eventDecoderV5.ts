@@ -177,6 +177,7 @@ export function decodeCodexFileV5(input: CodexParsedFileInputV5): CodexDecodedFi
   let fileSessionId = input.logicalIdHint;
   let firstSessionMetaId: string | undefined;
   let fileParentSessionId: string | undefined;
+  const replayedAncestorSessionIds = new Set<string>();
   let forkTimestamp: number | undefined;
   for (const [eventIndex, rawEvent] of input.values.entries()) {
     const taxonomy = codexEventTypeInfo(rawEvent);
@@ -208,20 +209,33 @@ export function decodeCodexFileV5(input: CodexParsedFileInputV5): CodexDecodedFi
     const eventType = stringValue(rawEvent.type);
     if (eventType === "session_meta") {
       diagnostics.sessionMetaEvents += 1;
-      const isKnownParentReplay = !!fileParentSessionId && sessionId === fileParentSessionId && firstSessionMetaId !== sessionId;
-      if (!firstSessionMetaId && sessionId) {
+      const isKnownParentReplay = !!firstSessionMetaId && !!sessionId && sessionId !== firstSessionMetaId && replayedAncestorSessionIds.has(sessionId);
+      const isPrimarySessionMeta = !firstSessionMetaId && !!sessionId;
+      if (isPrimarySessionMeta) {
         if (fileSessionId && fileSessionId !== sessionId) diagnostics.sessionIdentityConflicts += 1;
         firstSessionMetaId = sessionId;
         fileSessionId = sessionId;
-      } else if (firstSessionMetaId && sessionId && firstSessionMetaId !== sessionId && !isKnownParentReplay) {
-        diagnostics.sessionIdentityConflicts += 1;
+        fileParentSessionId = parentSessionId ?? fileParentSessionId;
+        if (fileParentSessionId) replayedAncestorSessionIds.add(fileParentSessionId);
+        if (fileParentSessionId && timestamp !== undefined) forkTimestamp = forkTimestamp ?? timestamp;
+      } else if (!isKnownParentReplay) {
+        if (firstSessionMetaId && sessionId && firstSessionMetaId !== sessionId) diagnostics.sessionIdentityConflicts += 1;
+        if (fileParentSessionId && parentSessionId && fileParentSessionId !== parentSessionId) diagnostics.parentIdentityConflicts += 1;
+        fileParentSessionId = parentSessionId ?? fileParentSessionId;
+        if (parentSessionId) replayedAncestorSessionIds.add(parentSessionId);
+        if (fileParentSessionId && timestamp !== undefined) forkTimestamp = forkTimestamp ?? timestamp;
+      } else if (parentSessionId) {
+        replayedAncestorSessionIds.add(parentSessionId);
       }
-      if (fileParentSessionId && parentSessionId && fileParentSessionId !== parentSessionId) diagnostics.parentIdentityConflicts += 1;
-      fileParentSessionId = parentSessionId ?? fileParentSessionId;
-      if (fileParentSessionId && timestamp !== undefined) forkTimestamp = forkTimestamp ?? timestamp;
+      if (!isKnownParentReplay) {
+        context.sessionId = sessionId ?? context.sessionId;
+        context.parentSessionId = parentSessionId ?? context.parentSessionId;
+      }
     }
-    context.sessionId = sessionId ?? context.sessionId;
-    context.parentSessionId = parentSessionId ?? context.parentSessionId;
+    if (eventType !== "session_meta") {
+      context.sessionId = sessionId ?? context.sessionId;
+      context.parentSessionId = parentSessionId ?? context.parentSessionId;
+    }
     context.currentModel = model ?? context.currentModel;
     context.projectKey = projectKey ?? context.projectKey;
     const decoded: CodexAccountingEvent = {

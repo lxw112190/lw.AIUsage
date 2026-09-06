@@ -123,33 +123,41 @@ export class Web2AppFileSystem implements FileSystemPort {
     end?: number,
   ): Promise<ArrayBuffer> {
     if (end !== undefined && end <= start) return new ArrayBuffer(0);
-    const grant = await invoke<NativeGrant>("fs.openRead", { path });
-    if (typeof grant.id !== "string" || typeof grant.url !== "string")
-      throw new Error("Native file grant is invalid");
-    try {
-      if (typeof grant.size === "number" && start >= grant.size)
-        return new ArrayBuffer(0);
-      const headers: Record<string, string> = {};
-      if (start > 0 || end !== undefined)
-        headers.Range = `bytes=${start}-${end === undefined ? "" : Math.max(start, end - 1)}`;
-      const response = await fetch(grant.url, { headers });
-      if (
-        response.status === 416 &&
-        typeof grant.size === "number" &&
-        start >= grant.size
-      )
-        return new ArrayBuffer(0);
-      if (!response.ok)
-        throw new Error(`Native file read failed: ${response.status}`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      const selected =
-        response.status === 200
-          ? bytes.slice(Math.min(start, bytes.length), end)
-          : bytes;
-      return selected.buffer;
-    } finally {
-      await invoke("file.revoke", { id: grant.id }).catch(() => undefined);
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const grant = await invoke<NativeGrant>("fs.openRead", { path });
+      if (typeof grant.id !== "string" || typeof grant.url !== "string")
+        throw new Error("Native file grant is invalid");
+      try {
+        if (typeof grant.size === "number" && start >= grant.size)
+          return new ArrayBuffer(0);
+        const headers: Record<string, string> = {};
+        if (start > 0 || end !== undefined)
+          headers.Range = `bytes=${start}-${end === undefined ? "" : Math.max(start, end - 1)}`;
+        const response = await fetch(grant.url, { headers });
+        if (
+          response.status === 416 &&
+          typeof grant.size === "number" &&
+          start >= grant.size
+        )
+          return new ArrayBuffer(0);
+        if (!response.ok) {
+          lastError = new Error(`Native file read failed: ${response.status}`);
+          if (response.status !== 404 || attempt === 2) throw lastError;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          continue;
+        }
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        const selected =
+          response.status === 200
+            ? bytes.slice(Math.min(start, bytes.length), end)
+            : bytes;
+        return selected.buffer;
+      } finally {
+        await invoke("file.revoke", { id: grant.id }).catch(() => undefined);
+      }
     }
+    throw lastError ?? new Error("Native file read failed");
   }
 }
 

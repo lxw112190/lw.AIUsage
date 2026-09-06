@@ -28,6 +28,26 @@ describe("Web2AppFileSystem", () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("reopens a grant when a growing log invalidates it", async () => {
+    let opens = 0;
+    const invoke = vi.fn(async (method: string) => {
+      if (method === "fs.openRead") {
+        opens += 1;
+        return { id: `grant-${opens}`, url: "native://file", size: 10 + opens };
+      }
+      return {};
+    });
+    Object.defineProperty(globalThis, "window", { value: { lw: { invoke, on: vi.fn(), off: vi.fn() } }, configurable: true });
+    globalThis.fetch = vi.fn(async () => new Response(opens === 1 ? null : new Uint8Array([1, 2]), { status: opens === 1 ? 404 : 206 })) as unknown as typeof fetch;
+
+    const result = await new Web2AppFileSystem().readRange("/fixture.jsonl", 0, 2);
+
+    expect(new Uint8Array(result)).toEqual(new Uint8Array([1, 2]));
+    expect(opens).toBe(2);
+    expect(invoke).toHaveBeenCalledWith("file.revoke", { id: "grant-1" });
+    expect(invoke).toHaveBeenCalledWith("file.revoke", { id: "grant-2" });
+  });
+
   it("serializes concurrent native file reads", async () => {
     let active = 0;
     let maximum = 0;

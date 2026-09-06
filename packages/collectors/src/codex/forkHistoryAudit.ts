@@ -35,6 +35,8 @@ export interface CodexForkHistoryAuditItem {
 
 export interface CodexForkHistoryAudit {
   forkSessions: number;
+  ignoredSelfParentCursors: number;
+  ignoredSelfParentTraces: number;
   persistedBaselineAvailable: number;
   fullReplayBaselineAvailable: number;
   baselineMatched: number;
@@ -124,13 +126,20 @@ export function auditCodexForkHistory(
   recordDiff: RecordSetDiffLike,
 ): CodexForkHistoryAudit {
   const persisted = new Map<string, { parent?: string; baseline?: TokenUsage }>();
+  let ignoredSelfParentCursors = 0;
   for (const cursor of cursors) {
     const state = cursor.parserState;
+    if (state?.sessionId && state.forkedFromSessionId && state.sessionId === state.forkedFromSessionId) {
+      ignoredSelfParentCursors += 1;
+      continue;
+    }
     if (state?.sessionId && state.forkedFromSessionId)
       persisted.set(state.sessionId, { parent: state.forkedFromSessionId, baseline: state.forkBaselineUsage });
   }
-  const traceByChild = new Map(traces.map((trace) => [trace.childSessionId, trace]));
-  const childIds = new Set([...persisted.keys(), ...traces.map((trace) => trace.childSessionId)]);
+  const validTraces = traces.filter((trace) => trace.childSessionId !== trace.parentSessionId);
+  const ignoredSelfParentTraces = traces.length - validTraces.length;
+  const traceByChild = new Map(validTraces.map((trace) => [trace.childSessionId, trace]));
+  const childIds = new Set([...persisted.keys(), ...validTraces.map((trace) => trace.childSessionId)]);
   const forkMirrorOnlyIds = new Set(
     mirrorRecords
       .filter((record) => !!record.sessionId && childIds.has(record.sessionId) && recordDiff.mirrorOnlyIds.has(record.id))
@@ -218,6 +227,8 @@ export function auditCodexForkHistory(
   const globalMirrorOnlyRecords = recordDiff.mirrorOnlyIds.size;
   return {
     forkSessions: childIds.size,
+    ignoredSelfParentCursors,
+    ignoredSelfParentTraces,
     persistedBaselineAvailable,
     fullReplayBaselineAvailable,
     baselineMatched,

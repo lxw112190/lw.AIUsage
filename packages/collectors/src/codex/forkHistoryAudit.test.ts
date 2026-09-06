@@ -107,4 +107,18 @@ describe("Codex fork history audit", () => {
     expect(report.allGlobalMirrorOnlyExplainedByFork).toBe(false);
     expect(report.forkMirrorOnlyInvariant).toBe(true);
   });
+
+  it("ignores self-parent cursor and trace evidence", () => {
+    const report = auditCodexForkHistory(
+      [{ childSessionId: "same", parentSessionId: "same" }],
+      [{ parserState: { sessionId: "same", forkedFromSessionId: "same", forkBaselineUsage: usage(10) } }],
+      [],
+      { mirrorOnlyIds: new Set(), databaseOnlyIds: new Set(), contentMismatchIds: new Set() },
+    );
+
+    expect(report.ignoredSelfParentCursors).toBe(1);
+    expect(report.ignoredSelfParentTraces).toBe(1);
+    expect(report.forkSessions).toBe(0);
+    expect(report.items).toHaveLength(0);
+  });
 });

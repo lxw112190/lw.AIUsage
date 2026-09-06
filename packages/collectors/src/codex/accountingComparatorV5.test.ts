@@ -49,7 +49,7 @@ describe("Codex v4-v5 accounting comparator", () => {
       tokenEvent(1, 110, 20, "b"),
     ])]);
 
-    expect(result.comparatorVersion).toBe(2);
+    expect(result.comparatorVersion).toBe(3);
     expect(result.v4.totalTokens).toBe(30);
     expect(result.v5.canonicalTokens).toBe(30);
     expect(result.difference.accountingTokens).toBe(0);
@@ -365,5 +365,85 @@ describe("Codex v4-v5 accounting comparator", () => {
       eventIndexes: [0, 1],
       aggregateTokens: 10,
     });
+  });
+
+  it("resolves a colliding record id with timestamp metadata", () => {
+    const first = { ...tokenEvent(0, 100, 10), raw: { ...tokenEvent(0, 100, 10).raw, response_id: "collision" } };
+    const second = { ...tokenEvent(1, 200, 20), raw: { ...tokenEvent(1, 200, 20).raw, response_id: "collision" } };
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [first, second])]);
+
+    expect(result.universe.v4RecordMapping.resolvedByMetadataRecords).toBe(1);
+    expect(result.universe.v4RecordMapping.ambiguousRecords).toBe(0);
+    expect(result.comparisonEntries.find((entry) => entry.eventIndex === 1)?.v4?.mappingKind).toBe("resolved-metadata");
+  });
+
+  it("resolves a colliding record id with source kind metadata", () => {
+    const token = { ...tokenEvent(0, 100, 10), raw: { ...tokenEvent(0, 100, 10).raw, response_id: "source-kind" } };
+    const payload: CodexExtractedEvent = {
+      raw: { type: "response_item", timestamp: 100, response_id: "source-kind", payload: { model: "gpt-5", usage: { input_tokens: 5 } } },
+      eventIndex: 1,
+      eventType: "response_item",
+      explicitTimestamp: 100_000,
+      resolvedModel: "gpt-5",
+      resolvedSessionId: "session",
+      source: "payload-usage",
+      outerType: "response_item",
+      semanticType: "response_item",
+      isTokenCount: false,
+    };
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [token, payload])]);
+
+    expect(result.universe.v4RecordMapping.resolvedByMetadataRecords).toBe(1);
+    expect(result.comparisonEntries.find((entry) => entry.eventIndex === 1)?.v4?.mappingKind).toBe("resolved-metadata");
+  });
+
+  it("keeps an equivalent raw collision diagnostic-only", () => {
+    const first = { ...tokenEvent(0, 100, 10), raw: { ...tokenEvent(0, 100, 10).raw, response_id: "same" } };
+    const second = { ...first, eventIndex: 1 };
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [first, second])]);
+
+    expect(result.universe.v4RecordMapping.equivalentCollisionRecords).toBe(1);
+    expect(result.universe.v4RecordMapping.ambiguousRecords).toBe(0);
+    expect(result.universe.v4RecordMapping.equivalentCollisionExamples[0]?.mappingKind).toBe("equivalent-collision");
+    expect(result.comparisonEntries.filter((entry) => entry.v4?.mappingKind === "equivalent-collision")).toHaveLength(1);
+    expect(result.attribution.unexplainedDelta).not.toBe(0);
+  });
+
+  it("does not resolve a same-hash collision when V5 usage differs", () => {
+    const first = {
+      ...tokenEvent(0, 100, 10),
+      raw: { type: "token_count", timestamp: 100, response_id: "same", payload: { model: "gpt-5", info: { total_token_usage: { input_tokens: 10, total_tokens: 10 } } } },
+    };
+    const second = { ...first, eventIndex: 1 };
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [first, second])]);
+
+    expect(result.universe.v4RecordMapping.equivalentCollisionRecords).toBe(0);
+    expect(result.universe.v4RecordMapping.ambiguousRecords).toBe(1);
+    const evidence = result.universe.v4RecordMapping.ambiguousExamples[0];
+    expect(evidence?.mappingKind).toBe("ambiguous");
+    expect(evidence?.usageMatchCandidates).toBe(1);
+    expect(evidence?.candidates.filter((candidate) => candidate.v4UsageMatchesAfterFork)).toHaveLength(1);
+    expect(result.universe.v4RecordMapping.ambiguousUsageUniqueMatchRecords).toBe(1);
+    expect(result.universe.v4RecordMapping.ambiguousUsageNoMatchRecords).toBe(0);
+    expect(result.universe.v4RecordMapping.ambiguousUsageMultipleMatchRecords).toBe(0);
+  });
+
+  it("reports fork family deltas without changing attribution", () => {
+    const parent = file("/sessions/parent.jsonl", [tokenEvent(0, 100, 10, "parent")], "parent");
+    const child = file("/sessions/child.jsonl", [
+      { raw: { type: "session_meta", timestamp: 200, payload: { id: "child", forked_from_id: "parent" } }, eventIndex: 0, eventType: "session_meta", explicitTimestamp: 200_000, resolvedSessionId: "child", forkedFromId: "parent", outerType: "session_meta", semanticType: "session_meta", isTokenCount: false },
+      tokenEvent(1, 200, 20, "child"),
+    ], "child");
+    const result = compareCodexV4V5([parent, child]);
+
+    expect(result.forkEvidence.forkPairCount).toBe(1);
+    expect(result.forkEvidence.pairs[0]).toMatchObject({
+      parentSessionId: "parent",
+      childSessionId: "child",
+    });
+    expect(result.forkEvidence.pairs[0]?.familyDelta).toBe(
+      (result.forkEvidence.pairs[0]?.parentDelta ?? 0) + (result.forkEvidence.pairs[0]?.childDelta ?? 0),
+    );
+    expect(result.forkEvidence.unexplainedEventsOutsideForkFamilies).toBe(0);
   });
 });
