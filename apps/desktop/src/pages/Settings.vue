@@ -20,6 +20,16 @@ function changeTheme(event: Event): void {
   if (value === "system" || value === "light" || value === "dark")
     settings.setTheme(value as ThemeMode);
 }
+function migrationStatus(snapshotStable: boolean, comparatorReady: boolean): string {
+  if (!snapshotStable) return t("settings.v5SnapshotChanged");
+  return comparatorReady ? t("settings.v5Ready") : t("settings.v5Blocked");
+}
+function gateMark(value: boolean): string {
+  return value ? "✓" : "!";
+}
+function reasonLabel(reason: string): string {
+  return t(`settings.v5Reason.${reason}`);
+}
 async function rebuild(): Promise<void> {
   if (!window.confirm(t("confirm.rebuild"))) return;
   busy.value = true;
@@ -148,6 +158,37 @@ async function runRawAudit(): Promise<void> {
           <span>{{ t("settings.rawDifference") }}: {{ formatTokens(usage.codexAccountingAuditReport.reconciliation.differenceTokens) }}</span>
           <span>{{ t("settings.rawSnapshot") }}: {{ usage.codexAccountingAuditReport.snapshotStable ? "✓" : "!" }}</span>
           <span>{{ t("settings.rawSources") }}: {{ usage.codexAccountingAuditReport.raw.usageSources.tokenCount.events }} / {{ usage.codexAccountingAuditReport.raw.usageSources.nestedInfoNonTokenCount.events }} / {{ usage.codexAccountingAuditReport.raw.usageSources.payloadUsage.events }} / {{ usage.codexAccountingAuditReport.raw.usageSources.flatPayloadUsage.events }}</span>
+        </div>
+      </div>
+      <div v-if="usage.codexAccountingAuditReport?.v5MigrationValidation" class="audit-result">
+        <h3>{{ t("settings.v5Validation") }}</h3>
+        <div class="audit-summary">
+          <span>{{ t("settings.v5V4Tokens") }}</span><strong>{{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v4.totalTokens) }} Token</strong>
+          <span>{{ t("settings.v5Tokens") }}</span><strong>{{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.v5.canonicalTokens) }} Token</strong>
+          <span>{{ t("settings.v5Difference") }}</span><strong>{{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.difference.accountingTokens) }} Token</strong>
+          <span>{{ t("settings.v5ChangedEvents") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.attribution.changedEvents.toLocaleString() }}</strong>
+          <span>{{ t("settings.v5MixedEvents") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.attribution.mixedEvents.toLocaleString() }}</strong>
+          <span>{{ t("settings.v5UnexplainedEvents") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.attribution.unexplainedEvents.toLocaleString() }}</strong>
+          <span>{{ t("settings.v5MixedDelta") }}</span><strong>{{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.attribution.mixedDelta) }} Token</strong>
+          <span>{{ t("settings.v5UnexplainedDelta") }}</span><strong>{{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.attribution.unexplainedDelta) }} Token</strong>
+          <span>{{ t("settings.v5MigrationReady") }}</span><strong>{{ migrationStatus(usage.codexAccountingAuditReport.v5MigrationValidation.snapshotStable, usage.codexAccountingAuditReport.v5MigrationValidation.comparatorReady) }}</strong>
+        </div>
+        <h3 class="audit-subheading">{{ t("settings.v5Gates") }}</h3>
+        <div class="audit-breakdown">
+          <span>{{ t("settings.v5GateSource") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.sourceIntegrity) }}</span>
+          <span>{{ t("settings.v5GateUniverse") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.universeComparable) }}</span>
+          <span>{{ t("settings.v5GateInvariants") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.v5ParserInvariants) }}</span>
+          <span>{{ t("settings.v5GateActivation") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.v5Activation) }}</span>
+          <span>{{ t("settings.v5GateMapping") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.v4MappingComplete) }}</span>
+          <span>{{ t("settings.v5GateAttribution") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.attributionComplete) }}</span>
+          <span>{{ t("settings.v5GateBalanced") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.accountingBalanced) }}</span>
+          <span>{{ t("settings.v5GateSnapshot") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.snapshotStable) }}</span>
+        </div>
+        <h3 class="audit-subheading">{{ t("settings.v5Reasons") }}</h3>
+        <div class="audit-breakdown">
+          <span v-for="item in usage.codexAccountingAuditReport.v5MigrationValidation.comparison.attribution.byReason.filter((item) => item.events > 0)" :key="item.reason">
+            {{ reasonLabel(item.reason) }}: {{ formatTokens(item.delta) }} Token / {{ item.events.toLocaleString() }}
+          </span>
         </div>
       </div>
       <div class="setting-row">

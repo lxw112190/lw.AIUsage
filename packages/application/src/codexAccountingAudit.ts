@@ -13,6 +13,8 @@ import {
   type CodexEventTaxonomySummary,
   type CodexForkHistoryAudit,
   type CodexRawAuditReport,
+  type CodexV4V5ComparisonReport,
+  compareCodexV4V5,
   type ParserV4MirrorRecord,
   type PayloadUsageOverlapReport,
 } from "@lw-aiusage/collectors";
@@ -44,7 +46,7 @@ export interface CodexRecordReconciliation {
 
 export interface CodexAccountingAuditReport {
   auditVersion: 3;
-  auditRevision: 7;
+  auditRevision: 8;
   parserVersion: 4;
   accounting: "codex-accounting-audit-v3";
   generatedAt: number;
@@ -54,6 +56,7 @@ export interface CodexAccountingAuditReport {
   eventTaxonomy: CodexEventTaxonomySummary;
   forkHistory: CodexForkHistoryAudit;
   payloadUsageOverlap: PayloadUsageOverlapReport;
+  v5MigrationValidation: CodexV5MigrationValidation;
   database: SourceUsageSummary;
   reconciliation: {
     mirrorUsage: TokenUsage;
@@ -84,6 +87,15 @@ export interface CodexAccountingAuditReport {
     mirrorShadowDuplicateCount: number;
     matched: boolean;
   };
+}
+
+export type CodexV5ComparisonSummary = Omit<CodexV4V5ComparisonReport, "comparisonEntries">;
+
+export interface CodexV5MigrationValidation {
+  comparison: CodexV5ComparisonSummary;
+  snapshotStable: boolean;
+  comparatorReady: boolean;
+  readyForCollectorSwitch: boolean;
 }
 
 export class CodexAccountingAuditService {
@@ -120,6 +132,8 @@ export class CodexAccountingAuditService {
       },
     );
     const mirror = replayCodexV4(extracted);
+    const comparison = compareCodexV4V5(extracted, { detailLimit: 20 });
+    const { comparisonEntries: _comparisonEntries, ...compactComparison } = comparison;
     const afterSnapshot = await snapshotCodexSource(this.platform);
     const database = await this.repository.getSourceUsageSummary("codex");
     const databaseRecords = await this.repository.getSourceAuditRecords("codex");
@@ -137,6 +151,12 @@ export class CodexAccountingAuditService {
     const payloadUsageOverlap = auditCodexPayloadUsageOverlap(extracted);
     const recordReconciliation = compareRecords([...mirror.records.values()], databaseRecords);
     const snapshotStable = beforeSnapshot.fingerprint === afterSnapshot.fingerprint && sameSummary(databaseBefore, database);
+    const v5MigrationValidation: CodexV5MigrationValidation = {
+      comparison: compactComparison,
+      snapshotStable,
+      comparatorReady: comparison.readyForCollectorSwitch,
+      readyForCollectorSwitch: snapshotStable && comparison.readyForCollectorSwitch,
+    };
     const mirrorTokens = totalTokens(mirror.usage);
     const differenceUsage = subtractUsage(mirror.usage, database.usage);
     const differenceTokens = mirrorTokens - database.totalTokens;
@@ -146,7 +166,7 @@ export class CodexAccountingAuditService {
     const sessionCountMatched = mirror.sessionCount === database.sessionCount;
     return {
       auditVersion: 3,
-      auditRevision: 7,
+      auditRevision: 8,
       parserVersion: 4,
       accounting: "codex-accounting-audit-v3",
       generatedAt: Date.now(),
@@ -156,6 +176,7 @@ export class CodexAccountingAuditService {
       eventTaxonomy,
       forkHistory,
       payloadUsageOverlap,
+      v5MigrationValidation,
       database,
       reconciliation: {
         mirrorUsage: mirror.usage,

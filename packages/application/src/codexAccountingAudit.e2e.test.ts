@@ -45,7 +45,10 @@ describe("Codex accounting audit end to end", () => {
     expect(report.raw.usageSources.payloadUsage.events).toBe(3);
     expect(report.raw.usageSources.flatPayloadUsage.events).toBe(1);
     expect(report.raw.usageSources.ignoredNoModel.events).toBe(1);
-    expect(report.auditRevision).toBe(7);
+    expect(report.auditRevision).toBe(8);
+    expect(report.v5MigrationValidation.snapshotStable).toBe(true);
+    expect(report.v5MigrationValidation.comparison.v4.totalTokens).toBeGreaterThan(0);
+    expect(report.v5MigrationValidation.comparison.v5.canonicalTokens).toBeGreaterThan(0);
     expect(report.eventTaxonomy.tokenCountEvents).toBeGreaterThan(0);
     expect(report.payloadUsageOverlap.payloadTokenInvariant).toBe(true);
     expect(report.payloadUsageOverlap.payloadUniverseEventInvariant).toBe(true);
