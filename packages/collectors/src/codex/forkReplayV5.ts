@@ -15,7 +15,11 @@ import {
 } from "./payloadFallbackV5";
 
 export interface ForkSessionSourceV5 {
-  /** Logical session identity, independent of the backing file path. */
+  /**
+   * One already reconciled logical Codex session per sessionId.
+   * sessions/ and archived_sessions/ duplicates must be reconciled before
+   * entering this layer.
+   */
   sessionId: string;
   parentSessionId?: string;
   forkTimestamp?: number;
@@ -52,6 +56,7 @@ export type ForkBaselineStatus =
   | "missing-parent"
   | "missing-fork-timestamp"
   | "missing-parent-checkpoint"
+  | "missing-child-total-timestamp"
   | "child-counter-reset"
   | "incomparable"
   | "cycle"
@@ -77,6 +82,7 @@ export interface ForkBaselineDiagnosticsV5 {
   missingParentSessions: number;
   missingForkTimestampSessions: number;
   missingParentCheckpointSessions: number;
+  missingChildTotalTimestampSessions: number;
   counterResetAtForkSessions: number;
   incomparableBaselineSessions: number;
   cycleSessions: number;
@@ -187,6 +193,37 @@ const hasUsageEvent = (event: CodexAccountingEvent): boolean =>
 
 const hasReplayIdentity = (event: CodexAccountingEvent): boolean =>
   !!event.responseId || !!event.turnId;
+
+export interface ForkReplayIdentityComparison {
+  compatible: boolean;
+  hasSharedIdentity: boolean;
+  responseMatch: boolean;
+  turnMatch: boolean;
+  responseConflict: boolean;
+  turnConflict: boolean;
+}
+
+export function compareForkReplayIdentity(
+  parent: CodexAccountingEvent,
+  child: CodexAccountingEvent,
+): ForkReplayIdentityComparison {
+  const parentResponse = parent.responseId;
+  const childResponse = child.responseId;
+  const parentTurn = parent.turnId;
+  const childTurn = child.turnId;
+  const responseConflict = !!parentResponse && !!childResponse && parentResponse !== childResponse;
+  const turnConflict = !!parentTurn && !!childTurn && parentTurn !== childTurn;
+  const responseMatch = !!parentResponse && !!childResponse && parentResponse === childResponse;
+  const turnMatch = !!parentTurn && !!childTurn && parentTurn === childTurn;
+  return {
+    compatible: !responseConflict && !turnConflict && (responseMatch || turnMatch),
+    hasSharedIdentity: responseMatch || turnMatch,
+    responseMatch,
+    turnMatch,
+    responseConflict,
+    turnConflict,
+  };
+}
 
 const cycleKey = (cycle: readonly string[]): string => [...cycle].sort().join("\n");
 
@@ -302,7 +339,9 @@ export function findForkBaselineCheckpoint(
         : [];
     });
   return candidates.sort((left, right) =>
-    right.timestamp - left.timestamp || compareEvent(left.event, right.event)).at(0);
+    right.timestamp - left.timestamp ||
+    right.event.eventIndex - left.event.eventIndex ||
+    right.event.rawIdentity.localeCompare(left.event.rawIdentity)).at(0);
 }
 
 const baselineDiagnostics = (): ForkBaselineDiagnosticsV5 => ({
@@ -313,6 +352,7 @@ const baselineDiagnostics = (): ForkBaselineDiagnosticsV5 => ({
   missingParentSessions: 0,
   missingForkTimestampSessions: 0,
   missingParentCheckpointSessions: 0,
+  missingChildTotalTimestampSessions: 0,
   counterResetAtForkSessions: 0,
   incomparableBaselineSessions: 0,
   cycleSessions: 0,
@@ -364,7 +404,10 @@ export function resolveForkBaselinesV5(
     } else {
       const parent = graph.nodes.get(session.sessionId)?.parent!;
       const checkpoint = findForkBaselineCheckpoint(parent, session.forkTimestamp);
-      const firstChildTotalEvent = orderedEvents(session.events).find((event) => !!event.tokenCount?.total);
+      const firstChildTotalEvent = [...session.events]
+        .filter((event) => !!event.tokenCount?.total)
+        .sort((left, right) => left.eventIndex - right.eventIndex || left.rawIdentity.localeCompare(right.rawIdentity))
+        .at(0);
       resolution.checkpoint = checkpoint;
       resolution.firstChildTotalEvent = firstChildTotalEvent;
       if (!checkpoint) {
@@ -373,6 +416,9 @@ export function resolveForkBaselinesV5(
       } else if (!firstChildTotalEvent?.tokenCount?.total) {
         resolution.status = "not-needed";
         diagnostics.noReplaySessions += 1;
+      } else if (firstChildTotalEvent.timestamp === undefined) {
+        resolution.status = "missing-child-total-timestamp";
+        diagnostics.missingChildTotalTimestampSessions += 1;
       } else {
         const initialState: TokenCountState = {
           previousTotalRaw: checkpoint.rawTotal,
@@ -434,9 +480,8 @@ export function sameForkReplayContribution(
 ): boolean {
   if (parent.event.timestamp === undefined || child.event.timestamp === undefined || parent.event.timestamp !== child.event.timestamp)
     return false;
-  const responseMatch = !!parent.event.responseId && parent.event.responseId === child.event.responseId;
-  const turnMatch = !!parent.event.turnId && parent.event.turnId === child.event.turnId;
-  if (!responseMatch && !turnMatch) return false;
+  const identity = compareForkReplayIdentity(parent.event, child.event);
+  if (!identity.compatible) return false;
   if (parent.event.model && child.event.model && parent.event.model !== child.event.model) return false;
   if (parent.precision === "partial" || child.precision === "partial") return false;
   if (parent.precision === "components-exact" && child.precision === "components-exact")
@@ -452,6 +497,7 @@ const replayDiagnostics = (): ForkReplayDiagnosticsV5 => ({
   missingParentSessions: 0,
   missingForkTimestampSessions: 0,
   missingParentCheckpointSessions: 0,
+  missingChildTotalTimestampSessions: 0,
   counterResetAtForkSessions: 0,
   incomparableBaselineSessions: 0,
   cycleSessions: 0,

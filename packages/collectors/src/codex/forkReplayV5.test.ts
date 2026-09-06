@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { totalTokens, type TokenUsage } from "@lw-aiusage/core";
 import {
   buildForkSessionGraphV5,
   canonicalUsageFromPayloadFallback,
   canonicalUsageFromTokenCount,
+  compareForkReplayIdentity,
   findForkBaselineCheckpoint,
   resolveForkBaselinesV5,
   resolveForkReplayV5,
@@ -13,7 +13,7 @@ import {
   type ForkSessionSourceV5,
 } from "./forkReplayV5";
 import { decodeRawTokenUsage, deriveTokenCountContribution, type CodexAccountingEvent, type RawTokenUsage } from "./accountingV5";
-import { payloadUsageCandidateOf, type PayloadFallbackContribution } from "./payloadFallbackV5";
+import { canonicalTokenCountRefOf, payloadUsageCandidateOf, type PayloadFallbackContribution } from "./payloadFallbackV5";
 
 const raw = (value: Record<string, unknown>): RawTokenUsage => {
   const result = decodeRawTokenUsage(value);
@@ -61,13 +61,9 @@ const tokenContribution = (
   const tokenEvent = event(rawIdentity, { ...options, tokenCount: { last: raw(usage) } });
   const contribution = deriveTokenCountContribution(tokenEvent, { segment: 0 });
   if (!contribution) throw new Error("expected contribution");
-  return canonicalUsageFromTokenCount({
-    event: tokenEvent,
-    usage: contribution.usage,
-    aggregateTotal: totalTokens(contribution.usage),
-    method: contribution.method,
-    precision: contribution.method === "last" ? "components-exact" : "partial",
-  });
+  const ref = canonicalTokenCountRefOf(tokenEvent, contribution);
+  if (!ref) throw new Error("expected canonical token ref");
+  return canonicalUsageFromTokenCount(ref);
 };
 
 const canonical = (
@@ -75,7 +71,7 @@ const canonical = (
   tokens: number,
   timestamp: number,
   options: Parameters<typeof event>[1] = {},
-): CanonicalUsageContributionV5 => tokenContribution(rawIdentity, { input_tokens: tokens }, { ...options, timestamp });
+): CanonicalUsageContributionV5 => tokenContribution(rawIdentity, { input_tokens: tokens, output_tokens: 0 }, { ...options, timestamp });
 
 const session = (
   sessionId: string,
@@ -109,6 +105,17 @@ describe("Codex v5 fork graph and baseline", () => {
 
     expect(checkpoint?.rawTotal.total).toBe(150);
     expect(checkpoint?.timestamp).toBe(150);
+  });
+
+  it("uses the later persisted checkpoint when timestamps are equal", () => {
+    const parent = session("parent", {
+      events: [
+        totalEvent("early", { total_tokens: 100 }, 900, { eventIndex: 10 }),
+        totalEvent("late", { total_tokens: 150 }, 900, { eventIndex: 11 }),
+      ],
+    });
+
+    expect(findForkBaselineCheckpoint(parent, 1000)?.rawTotal.total).toBe(150);
   });
 
   it("resolves inherited cumulative baseline without using the parent terminal total", () => {
@@ -155,6 +162,51 @@ describe("Codex v5 fork graph and baseline", () => {
 
     expect(result.resolutions.get("equal")).toMatchObject({ status: "resolved", previewMethod: "duplicate-zero", previewContributionAggregate: 0 });
     expect(result.resolutions.get("last")).toMatchObject({ status: "resolved", previewMethod: "last", previewContributionAggregate: 30 });
+  });
+
+  it("does not seed from an untimestamped child total", () => {
+    const parent = session("parent", { events: [totalEvent("p150", { total_tokens: 150 }, 900)] });
+    const child = session("child", {
+      parentSessionId: "parent",
+      forkTimestamp: 1000,
+      events: [event("c180", { tokenCount: { total: raw({ total_tokens: 180 }) } })],
+    });
+
+    const result = resolveForkBaselinesV5([child, parent]);
+    const resolution = result.resolutions.get("child");
+
+    expect(resolution?.status).toBe("missing-child-total-timestamp");
+    expect(resolution?.initialState).toBeUndefined();
+    expect(result.diagnostics.missingChildTotalTimestampSessions).toBe(1);
+  });
+
+  it("selects the first child total by persisted event order", () => {
+    const parent = session("parent", { events: [totalEvent("p150", { total_tokens: 150 }, 900)] });
+    const child = session("child", {
+      parentSessionId: "parent",
+      forkTimestamp: 1000,
+      events: [
+        totalEvent("first-persisted", { total_tokens: 180 }, 1100, { eventIndex: 1 }),
+        totalEvent("earlier-timestamp", { total_tokens: 170 }, 1050, { eventIndex: 2 }),
+      ],
+    });
+
+    expect(resolveForkBaselinesV5([child, parent]).resolutions.get("child")?.firstChildTotalEvent?.rawIdentity).toBe("first-persisted");
+  });
+
+  it("allows a child total at the fork timestamp for baseline but not replay suppression", () => {
+    const parent = session("parent", { events: [totalEvent("p150", { total_tokens: 150 }, 900)] });
+    const child = session("child", {
+      parentSessionId: "parent",
+      forkTimestamp: 1000,
+      events: [totalEvent("c180", { total_tokens: 180 }, 1000)],
+    });
+
+    const baseline = resolveForkBaselinesV5([child, parent]).resolutions.get("child");
+    expect(baseline).toMatchObject({ status: "resolved", previewContributionAggregate: 30 });
+
+    const replay = resolveForkReplayV5([canonicalSession("parent", { contributions: [canonical("p", 10, 1000, { responseId: "r" })] }), canonicalSession("child", { parentSessionId: "parent", forkTimestamp: 1000, contributions: [canonical("c", 10, 1000, { responseId: "r" })] })]);
+    expect(replay.sessions.find((item) => item.sessionId === "child")?.suppressed).toHaveLength(0);
   });
 
   it("does not seed a child counter after reset or when schemas are incomparable", () => {
@@ -216,6 +268,25 @@ describe("Codex v5 fork graph and baseline", () => {
 });
 
 describe("Codex v5 fork replay matching", () => {
+  it("blocks explicit response or turn conflicts even when the other identity matches", () => {
+    const responseConflictParent = canonical("parent-a", 10, 100, { responseId: "response-a", turnId: "turn-1" });
+    const responseConflictChild = canonical("child-a", 10, 100, { responseId: "response-b", turnId: "turn-1" });
+    const turnConflictParent = canonical("parent-b", 10, 100, { responseId: "response-1", turnId: "turn-a" });
+    const turnConflictChild = canonical("child-b", 10, 100, { responseId: "response-1", turnId: "turn-b" });
+
+    expect(compareForkReplayIdentity(responseConflictParent.event, responseConflictChild.event)).toMatchObject({ compatible: false, responseConflict: true, turnMatch: true });
+    expect(compareForkReplayIdentity(turnConflictParent.event, turnConflictChild.event)).toMatchObject({ compatible: false, responseMatch: true, turnConflict: true });
+    expect(sameForkReplayContribution(responseConflictParent, responseConflictChild)).toBe(false);
+    expect(sameForkReplayContribution(turnConflictParent, turnConflictChild)).toBe(false);
+  });
+
+  it("requires the same identity kind to be shared", () => {
+    const parent = canonical("parent", 10, 100, { responseId: "response-1" });
+    const child = canonical("child", 10, 100, { turnId: "turn-1" });
+
+    expect(compareForkReplayIdentity(parent.event, child.event)).toMatchObject({ compatible: false, hasSharedIdentity: false });
+    expect(sameForkReplayContribution(parent, child)).toBe(false);
+  });
   it("suppresses a complete pre-fork canonical prefix and keeps post-fork events", () => {
     const parentContributions = [
       canonical("a", 10, 100, { responseId: "r-a" }),
