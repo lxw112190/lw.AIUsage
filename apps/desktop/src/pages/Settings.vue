@@ -171,7 +171,7 @@ async function runRawAudit(): Promise<void> {
           <span>{{ t("settings.v5UnexplainedEvents") }}</span><strong>{{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.attribution.unexplainedEvents.toLocaleString() }}</strong>
           <span>{{ t("settings.v5MixedDelta") }}</span><strong>{{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.attribution.mixedDelta) }} Token</strong>
           <span>{{ t("settings.v5UnexplainedDelta") }}</span><strong>{{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.attribution.unexplainedDelta) }} Token</strong>
-          <span>{{ t("settings.v5MigrationReady") }}</span><strong>{{ migrationStatus(usage.codexAccountingAuditReport.v5MigrationValidation.snapshotStable, usage.codexAccountingAuditReport.v5MigrationValidation.comparatorReady) }}</strong>
+          <span>{{ t("settings.v5MigrationReady") }}</span><strong>{{ migrationStatus(usage.codexAccountingAuditReport.v5MigrationValidation.sourceSnapshotStable, usage.codexAccountingAuditReport.v5MigrationValidation.comparatorReady) }}</strong>
         </div>
         <h3 class="audit-subheading">{{ t("settings.v5Gates") }}</h3>
         <div class="audit-breakdown">
@@ -182,7 +182,7 @@ async function runRawAudit(): Promise<void> {
           <span>{{ t("settings.v5GateMapping") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.v4MappingComplete) }}</span>
           <span>{{ t("settings.v5GateAttribution") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.attributionComplete) }}</span>
           <span>{{ t("settings.v5GateBalanced") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.accountingBalanced) }}</span>
-          <span>{{ t("settings.v5GateSnapshot") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.snapshotStable) }}</span>
+          <span>{{ t("settings.v5GateSnapshot") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.sourceSnapshotStable) }}</span>
         </div>
         <h3 class="audit-subheading">{{ t("settings.v5Reasons") }}</h3>
         <div class="audit-breakdown">

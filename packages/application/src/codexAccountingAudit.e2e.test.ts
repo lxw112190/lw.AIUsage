@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CodexCollector } from "@lw-aiusage/collectors";
-import { createFixturePlatform } from "@lw-aiusage/platform";
+import { createFixturePlatform, type RuntimePlatform } from "@lw-aiusage/platform";
 import { MemoryUsageRepository } from "@lw-aiusage/storage";
 import { SyncManager } from "./sync";
 import { CodexAccountingAuditService } from "./codexAccountingAudit";
@@ -45,7 +45,12 @@ describe("Codex accounting audit end to end", () => {
     expect(report.raw.usageSources.payloadUsage.events).toBe(3);
     expect(report.raw.usageSources.flatPayloadUsage.events).toBe(1);
     expect(report.raw.usageSources.ignoredNoModel.events).toBe(1);
-    expect(report.auditRevision).toBe(8);
+    expect(report.auditRevision).toBe(9);
+    expect(report.parserVersion).toBe(4);
+    expect(report.snapshot.sourceStable).toBe(true);
+    expect(report.snapshot.databaseStable).toBe(true);
+    expect(report.snapshot.auditStable).toBe(true);
+    expect(report.v5MigrationValidation.sourceSnapshotStable).toBe(true);
     expect(report.v5MigrationValidation.snapshotStable).toBe(true);
     expect(report.v5MigrationValidation.comparison.v4.totalTokens).toBeGreaterThan(0);
     expect(report.v5MigrationValidation.comparison.v5.canonicalTokens).toBeGreaterThan(0);
@@ -59,5 +64,37 @@ describe("Codex accounting audit end to end", () => {
       report.payloadUsageOverlap.payloadTokenInvariant && report.payloadUsageOverlap.payloadEventInvariant,
     );
     expect(report.forkHistory.forkMirrorOnlyInvariant).toBe(true);
+  });
+
+  it("blocks migration after the source snapshot changes during the audit window", async () => {
+    const base = createFixturePlatform({
+      "/fixture/.codex/sessions/a.jsonl": [
+        JSON.stringify({ type: "session_meta", payload: { id: "a", model: "gpt-5" } }),
+        tokenCount({ model: "gpt-5", info: { last_token_usage: { input_tokens: 12 } } }, "a"),
+      ].join("\n") + "\n",
+    });
+    let sessionListCalls = 0;
+    const fileSystem = Object.create(base.fs) as RuntimePlatform["fs"];
+    fileSystem.list = async (path: string) => {
+      const entries = await base.fs.list(path);
+      if (path === "/fixture/.codex/sessions") {
+        sessionListCalls += 1;
+        if (sessionListCalls >= 3) {
+          return entries.map((entry) => entry.path.endsWith("a.jsonl") ? { ...entry, modifiedAt: 2 } : entry);
+        }
+      }
+      return entries;
+    };
+    const platform: RuntimePlatform = {
+      ...base,
+      fs: fileSystem,
+    };
+
+    const report = await new CodexAccountingAuditService(platform, new MemoryUsageRepository()).audit();
+
+    expect(report.snapshot.sourceStable).toBe(false);
+    expect(report.v5MigrationValidation.sourceSnapshotStable).toBe(false);
+    expect(report.v5MigrationValidation.readyForCollectorSwitch).toBe(false);
+    expect(report.v5MigrationValidation.comparison.v4.totalTokens).toBeGreaterThan(0);
   });
 });
