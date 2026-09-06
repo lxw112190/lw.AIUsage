@@ -12,7 +12,10 @@ export type UsagePrecision = "components-exact" | "aggregate-only" | "partial";
 
 export interface CanonicalTokenCountRef {
   event: CodexAccountingEvent;
+  /** The five-component representation of the canonical contribution. */
   usage: TokenUsage;
+  /** The total token amount actually contributed by the TokenCount engine. */
+  aggregateTotal: number;
   method: TokenCountAccountingMethod;
   precision: UsagePrecision;
 }
@@ -42,6 +45,7 @@ export type PayloadResolutionReason =
   | "no-token-candidate"
   | "different-components"
   | "same-total-different-components"
+  | "insufficient-precision"
   | "model-conflict"
   | "multiple-candidates";
 
@@ -56,6 +60,8 @@ export interface PayloadResolution {
 export interface PayloadFallbackContribution {
   event: CodexAccountingEvent;
   usage: TokenUsage;
+  /** The total token amount contributed by this payload fallback. */
+  aggregateTotal: number;
   sourceKind: "payload-fallback";
   precision: UsagePrecision;
   reason: Exclude<PayloadDisposition, "suppress-confirmed" | "ignore-zero">;
@@ -87,6 +93,7 @@ export interface PayloadFallbackDiagnostics {
   sameResponseDifferentUsageEvents: number;
   sameResponseSameTotalDifferentComponentsEvents: number;
   modelConflictEvents: number;
+  insufficientPrecisionEvents: number;
 }
 
 export interface PayloadFallbackInput {
@@ -124,11 +131,12 @@ const sameUsageComponents = (left: TokenUsage, right: TokenUsage): boolean =>
   left.outputTokens === right.outputTokens &&
   left.reasoningOutputTokens === right.reasoningOutputTokens;
 
-const sameUsageTotal = (left: TokenUsage, right: TokenUsage): boolean => totalTokens(left) === totalTokens(right);
-
 export function eventScope(event: CodexAccountingEvent): string {
   return event.sessionId ?? event.sourcePath;
 }
+
+const sameAggregateTotal = (payload: PayloadUsageCandidate, token: CanonicalTokenCountRef): boolean =>
+  payload.aggregateTotal === token.aggregateTotal;
 
 const rawEventKey = (event: CodexAccountingEvent): string => `${eventScope(event)}\n${event.rawIdentity}`;
 
@@ -152,7 +160,7 @@ export function deduplicatePayloadCandidates(
   for (const payload of [...payloads].sort((left, right) => compareAccountingEvent(left.event, right.event))) {
     if (seenKeys.has(rawEventKey(payload.event))) {
       exactDuplicateCount += 1;
-      exactDuplicateTokens += totalTokens(payload.usage);
+      exactDuplicateTokens += payload.aggregateTotal;
       continue;
     }
     seenKeys.add(rawEventKey(payload.event));
@@ -175,7 +183,7 @@ export function tokenCountUsagePrecision(
   if (contribution.method !== "last" || !event.tokenCount?.last) return "partial";
   const raw = event.tokenCount.last;
   if (!hasPrimaryComponents(raw)) return raw.fieldPresence.total ? "aggregate-only" : "partial";
-  if (raw.fieldPresence.total && totalTokens(normalizeRawTokenUsage(raw)) !== raw.total) return "aggregate-only";
+  if (raw.fieldPresence.total && totalTokens(normalizeRawTokenUsage(raw)) !== raw.total) return "partial";
   return "components-exact";
 }
 
@@ -187,6 +195,7 @@ export function canonicalTokenCountRefOf(
   return {
     event,
     usage: contribution.usage,
+    aggregateTotal: totalTokens(contribution.usage),
     method: contribution.method,
     precision: tokenCountUsagePrecision(event, contribution),
   };
@@ -237,6 +246,8 @@ interface PayloadMatchState {
   resolutions: Map<number, PayloadResolution>;
   usedPayloads: Set<number>;
   usedTokens: Set<number>;
+  responseAmbiguousPayloads: Set<number>;
+  tokenIndexesByResponse: Map<string, number[]>;
 }
 
 const modelsCompatible = (payload: CodexAccountingEvent, token: CodexAccountingEvent): boolean =>
@@ -246,7 +257,7 @@ const rawMatchEvidence = (payload: PayloadUsageCandidate, token: CanonicalTokenC
   if (payload.precision === "partial" || token.precision === "partial") return undefined;
   if (payload.precision === "components-exact" && token.precision === "components-exact")
     return sameUsageComponents(payload.usage, token.usage) ? "same-raw-event-components" : undefined;
-  return sameUsageTotal(payload.usage, token.usage) ? "same-raw-event-aggregate" : undefined;
+  return sameAggregateTotal(payload, token) ? "same-raw-event-aggregate" : undefined;
 };
 
 function runRawEventPass(state: PayloadMatchState): void {
@@ -259,7 +270,7 @@ function runRawEventPass(state: PayloadMatchState): void {
   const matches: RawMatch[] = [];
   const payloadCandidates = new Map<number, RawMatch[]>();
   for (const [payloadIndex, payload] of state.payloads.entries()) {
-    if (state.usedPayloads.has(payloadIndex) || totalTokens(payload.usage) <= 0) continue;
+    if (state.usedPayloads.has(payloadIndex) || payload.aggregateTotal <= 0) continue;
     const candidates = (tokenIndexesByKey.get(rawEventKey(payload.event)) ?? [])
       .filter((tokenIndex) => !state.usedTokens.has(tokenIndex))
       .map((tokenIndex) => {
@@ -300,14 +311,29 @@ function responseTokensFor(
   state: PayloadMatchState,
   payload: PayloadUsageCandidate,
 ): { tokenIndex: number; token: CanonicalTokenCountRef }[] {
-  if (!payload.event.responseId) return [];
-  return state.tokens
-    .map((token, tokenIndex) => ({ tokenIndex, token }))
-    .filter(({ token, tokenIndex }) =>
-      !state.usedTokens.has(tokenIndex) &&
-      eventScope(token.event) === eventScope(payload.event) &&
-      token.event.responseId === payload.event.responseId);
+  const key = responseKey(payload.event);
+  if (!key) return [];
+  return (state.tokenIndexesByResponse.get(key) ?? [])
+    .filter((tokenIndex) => !state.usedTokens.has(tokenIndex))
+    .map((tokenIndex) => ({ tokenIndex, token: state.tokens[tokenIndex]! }));
 }
+
+const responseKey = (event: CodexAccountingEvent): string | undefined =>
+  event.responseId ? `${eventScope(event)}\n${event.responseId}` : undefined;
+
+const buildTokenIndexesByResponse = (
+  tokens: readonly CanonicalTokenCountRef[],
+): Map<string, number[]> => {
+  const result = new Map<string, number[]>();
+  for (const [index, token] of tokens.entries()) {
+    const key = responseKey(token.event);
+    if (!key) continue;
+    const indexes = result.get(key) ?? [];
+    indexes.push(index);
+    result.set(key, indexes);
+  }
+  return result;
+};
 
 function runResponsePass(state: PayloadMatchState): void {
   const payloadCandidates = new Map<number, number[]>();
@@ -327,7 +353,15 @@ function runResponsePass(state: PayloadMatchState): void {
     }
   }
   for (const [payloadIndex, tokenIndexes] of payloadCandidates) {
-    if (tokenIndexes.length !== 1 || (tokenCandidates.get(tokenIndexes[0]!) ?? []).length !== 1) continue;
+    if (tokenIndexes.length !== 1) {
+      state.responseAmbiguousPayloads.add(payloadIndex);
+      continue;
+    }
+    const reverse = tokenCandidates.get(tokenIndexes[0]!) ?? [];
+    if (reverse.length !== 1) {
+      for (const competingPayload of reverse) state.responseAmbiguousPayloads.add(competingPayload);
+      continue;
+    }
     const payload = state.payloads[payloadIndex]!;
     const token = state.tokens[tokenIndexes[0]!]!;
     state.resolutions.set(payloadIndex, {
@@ -345,14 +379,20 @@ function unresolvedResolution(state: PayloadMatchState, payloadIndex: number): P
   const payload = state.payloads[payloadIndex]!;
   if (!payload.event.responseId)
     return { payload, disposition: "fallback-unmatched", reason: "no-response-id" };
+  if (state.responseAmbiguousPayloads.has(payloadIndex))
+    return { payload, disposition: "fallback-ambiguous", reason: "multiple-candidates" };
   const responseTokens = responseTokensFor(state, payload);
   if (!responseTokens.length) return { payload, disposition: "fallback-unmatched", reason: "no-token-candidate" };
-  const modelConflict = responseTokens.some(({ token }) => !modelsCompatible(payload.event, token.event));
-  if (modelConflict) return { payload, disposition: "fallback-conflict", reason: "model-conflict" };
-  const sameComponents = responseTokens.filter(({ token }) => token.precision === "components-exact" && sameUsageComponents(payload.usage, token.usage));
-  if (sameComponents.length > 1) return { payload, disposition: "fallback-ambiguous", reason: "multiple-candidates" };
-  if (sameComponents.length === 1) return { payload, disposition: "fallback-ambiguous", reason: "multiple-candidates" };
-  if (responseTokens.some(({ token }) => sameUsageTotal(payload.usage, token.usage)))
+  const compatibleTokens = responseTokens.filter(({ token }) => modelsCompatible(payload.event, token.event));
+  if (!compatibleTokens.length) return { payload, disposition: "fallback-conflict", reason: "model-conflict" };
+  if (payload.precision !== "components-exact")
+    return { payload, disposition: "fallback-conflict", reason: "insufficient-precision" };
+  const exactTokens = compatibleTokens.filter(({ token }) => token.precision === "components-exact");
+  if (!exactTokens.length)
+    return { payload, disposition: "fallback-conflict", reason: "insufficient-precision" };
+  if (exactTokens.some(({ token }) => sameUsageComponents(payload.usage, token.usage)))
+    return { payload, disposition: "fallback-ambiguous", reason: "multiple-candidates" };
+  if (exactTokens.some(({ token }) => sameAggregateTotal(payload, token)))
     return { payload, disposition: "fallback-conflict", reason: "same-total-different-components" };
   return { payload, disposition: "fallback-conflict", reason: "different-components" };
 }
@@ -376,6 +416,7 @@ const emptyDiagnostics = (): PayloadFallbackDiagnostics => ({
   sameResponseDifferentUsageEvents: 0,
   sameResponseSameTotalDifferentComponentsEvents: 0,
   modelConflictEvents: 0,
+  insufficientPrecisionEvents: 0,
 });
 
 export function resolvePayloadFallbackV5(
@@ -387,7 +428,7 @@ export function resolvePayloadFallbackV5(
   const dedupedPayloads = deduplicatePayloadCandidates(orderedPayloads);
   const diagnostics = emptyDiagnostics();
   diagnostics.observedPayloadEvents = payloads.length;
-  diagnostics.observedPayloadTokens = payloads.reduce((sum, payload) => sum + totalTokens(payload.usage), 0);
+  diagnostics.observedPayloadTokens = payloads.reduce((sum, payload) => sum + payload.aggregateTotal, 0);
   diagnostics.exactRawDuplicateEvents = dedupedPayloads.exactDuplicateCount;
   diagnostics.exactRawDuplicateTokens = dedupedPayloads.exactDuplicateTokens;
 
@@ -397,13 +438,15 @@ export function resolvePayloadFallbackV5(
     resolutions: new Map(),
     usedPayloads: new Set(),
     usedTokens: new Set(),
+    responseAmbiguousPayloads: new Set(),
+    tokenIndexesByResponse: buildTokenIndexesByResponse(orderedTokens),
   };
   runRawEventPass(state);
   runResponsePass(state);
 
   for (const [payloadIndex, payload] of state.payloads.entries()) {
     if (state.resolutions.has(payloadIndex)) continue;
-    const resolution = totalTokens(payload.usage) <= 0
+    const resolution = payload.aggregateTotal <= 0
       ? { payload, disposition: "ignore-zero" as const }
       : unresolvedResolution(state, payloadIndex);
     state.resolutions.set(payloadIndex, resolution);
@@ -413,7 +456,7 @@ export function resolvePayloadFallbackV5(
   const suppressed: PayloadSuppression[] = [];
   const fallbacks: PayloadFallbackContribution[] = [];
   for (const resolution of resolutions) {
-    const payloadTokens = totalTokens(resolution.payload.usage);
+    const payloadTokens = resolution.payload.aggregateTotal;
     if (resolution.payload.componentConsistencyMismatch) diagnostics.componentConsistencyMismatchEvents += 1;
     if (resolution.disposition === "suppress-confirmed" && resolution.matchedToken && resolution.evidence) {
       suppressed.push({ payload: resolution.payload, token: resolution.matchedToken, evidence: resolution.evidence, suppressedTokens: payloadTokens });
@@ -425,7 +468,7 @@ export function resolvePayloadFallbackV5(
       diagnostics.zeroEvents += 1;
     } else {
       const reason = resolution.disposition as Exclude<PayloadDisposition, "suppress-confirmed" | "ignore-zero">;
-      fallbacks.push({ event: resolution.payload.event, usage: resolution.payload.usage, sourceKind: "payload-fallback", precision: resolution.payload.precision, reason });
+      fallbacks.push({ event: resolution.payload.event, usage: resolution.payload.usage, aggregateTotal: resolution.payload.aggregateTotal, sourceKind: "payload-fallback", precision: resolution.payload.precision, reason });
       diagnostics.fallbackEvents += 1;
       diagnostics.fallbackTokens += payloadTokens;
       if (resolution.disposition === "fallback-conflict") diagnostics.conflictEvents += 1;
@@ -434,6 +477,7 @@ export function resolvePayloadFallbackV5(
       if (resolution.reason === "model-conflict") diagnostics.modelConflictEvents += 1;
       if (resolution.reason === "different-components") diagnostics.sameResponseDifferentUsageEvents += 1;
       if (resolution.reason === "same-total-different-components") diagnostics.sameResponseSameTotalDifferentComponentsEvents += 1;
+      if (resolution.reason === "insufficient-precision") diagnostics.insufficientPrecisionEvents += 1;
     }
   }
 
@@ -443,6 +487,6 @@ export function resolvePayloadFallbackV5(
     resolutions,
     diagnostics,
     payloadEventInvariant: dedupedPayloads.candidates.length === suppressed.length + fallbacks.length + diagnostics.zeroEvents,
-    payloadTokenInvariant: dedupedPayloads.candidates.reduce((sum, payload) => sum + totalTokens(payload.usage), 0) === diagnostics.confirmedSuppressedTokens + diagnostics.fallbackTokens,
+    payloadTokenInvariant: dedupedPayloads.candidates.reduce((sum, payload) => sum + payload.aggregateTotal, 0) === diagnostics.confirmedSuppressedTokens + diagnostics.fallbackTokens,
   };
 }

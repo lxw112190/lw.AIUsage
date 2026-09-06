@@ -17,6 +17,11 @@ export interface CodexAccountingEvent {
     total?: RawTokenUsage;
   };
   payloadUsage?: RawTokenUsage;
+  /**
+   * Stable identity of one exact raw protocol event. It must distinguish
+   * persisted events and must not be derived only from session, response,
+   * turn, or timestamp metadata.
+   */
   rawIdentity: string;
 }
 

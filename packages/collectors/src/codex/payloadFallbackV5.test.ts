@@ -123,7 +123,9 @@ describe("Codex v5 payload fallback", () => {
 
     expect(result.suppressed).toHaveLength(0);
     expect(result.fallbacks[0]?.reason).toBe("fallback-conflict");
-    expect(result.resolutions[0]?.reason).toBe("same-total-different-components");
+    expect(result.resolutions[0]?.reason).toBe("insufficient-precision");
+    expect(result.diagnostics.ambiguousEvents).toBe(0);
+    expect(result.diagnostics.insufficientPrecisionEvents).toBe(1);
   });
 
   it("reports same-total different-components as a conflict", () => {
@@ -222,6 +224,37 @@ describe("Codex v5 payload fallback", () => {
     expect(result.diagnostics.modelConflictEvents).toBe(1);
   });
 
+  it("does not let a compatible token be hidden by another model conflict", () => {
+    const compatible = tokenRef("token-a", { total_tokens: 120 }, { responseId: "response-1", model: "gpt-a" });
+    const conflicting = tokenRef("token-b", { total_tokens: 120 }, { responseId: "response-1", model: "gpt-b", eventIndex: 1 });
+    const candidate = payload("payload", { total_tokens: 120 }, { responseId: "response-1", model: "gpt-a" });
+
+    const result = resolvePayloadFallbackV5([compatible, conflicting], [candidate]);
+
+    expect(result.fallbacks[0]?.reason).toBe("fallback-conflict");
+    expect(result.resolutions[0]?.reason).toBe("insufficient-precision");
+    expect(result.diagnostics.modelConflictEvents).toBe(0);
+    expect(result.diagnostics.insufficientPrecisionEvents).toBe(1);
+  });
+
+  it("treats a conflicting last aggregate as partial and keeps its canonical total", () => {
+    const token = tokenRef("token", { total_tokens: 100, input_tokens: 70, output_tokens: 20 });
+
+    expect(token.precision).toBe("partial");
+    expect(token.aggregateTotal).toBe(90);
+  });
+
+  it("does not suppress a partial TokenCount on a same raw event", () => {
+    const token = tokenRef("raw-1", { total_tokens: 100, input_tokens: 70, output_tokens: 20 });
+    const candidate = payload("raw-1", { input_tokens: 70, output_tokens: 20 });
+
+    const result = resolvePayloadFallbackV5([token], [candidate]);
+
+    expect(result.suppressed).toHaveLength(0);
+    expect(result.fallbacks[0]?.reason).toBe("fallback-unmatched");
+    expect(result.diagnostics.insufficientPrecisionEvents).toBe(0);
+  });
+
   it("preserves inconsistent payload snapshots as aggregate-only fallback data", () => {
     const candidate = payload("payload", { input_tokens: 100, output_tokens: 20, total_tokens: 100 });
 
@@ -229,6 +262,18 @@ describe("Codex v5 payload fallback", () => {
     expect(candidate.usage.inputTokens).toBe(100);
     expect(totalTokens(candidate.usage)).toBe(100);
     expect(candidate.componentConsistencyMismatch).toBe(true);
+  });
+
+  it("uses payload aggregateTotal for diagnostics and output contributions", () => {
+    const token = tokenRef("raw-1", { input_tokens: 100, output_tokens: 20 });
+    const candidate = { ...payload("raw-1", { input_tokens: 100, output_tokens: 20 }), aggregateTotal: 77 };
+
+    const result = resolvePayloadFallbackV5([token], [candidate]);
+
+    expect(result.diagnostics.observedPayloadTokens).toBe(77);
+    expect(result.diagnostics.confirmedSuppressedTokens).toBe(77);
+    expect(result.suppressed[0]?.suppressedTokens).toBe(77);
+    expect(result.payloadTokenInvariant).toBe(true);
   });
 
   it("ignores zero payloads without creating fallback usage", () => {
@@ -249,6 +294,21 @@ describe("Codex v5 payload fallback", () => {
     expect(result.suppressed).toHaveLength(0);
     expect(result.fallbacks).toHaveLength(1);
     expect(result.fallbacks[0]?.reason).toBe("fallback-unmatched");
+  });
+
+  it("keeps response-index results deterministic with unrelated token events", () => {
+    const unrelated = Array.from({ length: 50 }, (_, index) =>
+      tokenRef(`unrelated-${index}`, { input_tokens: index + 1, output_tokens: 1 }, { responseId: `other-${index}` }),
+    );
+    const token = tokenRef("token", { input_tokens: 100, output_tokens: 20 }, { responseId: "response-1" });
+    const candidate = payload("payload", { input_tokens: 100, output_tokens: 20 }, { responseId: "response-1" });
+
+    const result = resolvePayloadFallbackV5([token, ...unrelated], [candidate]);
+    const reversed = resolvePayloadFallbackV5([...unrelated.reverse(), token], [candidate]);
+
+    expect(result.resolutions).toEqual(reversed.resolutions);
+    expect(result.diagnostics).toEqual(reversed.diagnostics);
+    expect(result.suppressed[0]?.evidence).toBe("same-response-id-components");
   });
 
   it("matches independently of input order and returns deterministic resolutions", () => {
