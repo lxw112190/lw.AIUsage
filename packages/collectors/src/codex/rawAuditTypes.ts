@@ -38,6 +38,7 @@ export interface CodexExtractedFile {
   peekForkedFromId?: string;
   finalSessionId?: string;
   events: CodexExtractedEvent[];
+  parseErrors: string[];
 }
 
 export interface ParserV4MirrorRecord {

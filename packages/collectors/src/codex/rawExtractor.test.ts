@@ -16,4 +16,18 @@ describe("Codex raw extractor protocol boundaries", () => {
     expect(extracted.events[0]?.eventType).toBe("event_msg");
     expect(extracted.events[0]?.semanticType).toBe("session_meta");
   });
+
+  it("preserves malformed JSONL diagnostics alongside decoded events", async () => {
+    const content = [
+      JSON.stringify({ type: "response_item", payload: { text: "ok" } }),
+      "not-json",
+      JSON.stringify({ type: "response_item", payload: { text: "also ok" } }),
+      "",
+    ].join("\n");
+    const platform = createFixturePlatform({ "/fixture/errors.jsonl": content });
+    const extracted = await extractCodexFile(platform, entry("/fixture/errors.jsonl", content.length));
+
+    expect(extracted.events).toHaveLength(2);
+    expect(extracted.parseErrors).toEqual(["MALFORMED_JSONL"]);
+  });
 });

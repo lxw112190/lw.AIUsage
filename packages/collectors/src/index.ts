@@ -17,6 +17,7 @@ export * from "./codex/forkReplayV5";
 export * from "./codex/eventDecoderV5";
 export * from "./codex/logicalSessionV5";
 export * from "./codex/parserV5";
+export * from "./codex/accountingComparatorV5";
 export * from "./claude/collector";
 export * from "./claude/parser";
 export * from "./shared/jsonl";

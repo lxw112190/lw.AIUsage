@@ -55,6 +55,7 @@ const file = (path: string, events: CodexExtractedEvent[]): CodexExtractedFile =
   entry: entry(path),
   snapshotSize: 1,
   events,
+  parseErrors: [],
 });
 
 describe("Codex Parser v4 mirror", () => {

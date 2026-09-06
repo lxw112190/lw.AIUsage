@@ -59,7 +59,7 @@ const shadowedPayload = (index: number, timestamp: number, input: number): Codex
   resolvedSessionId: "session",
   source: "token-count",
 });
-const file = (events: CodexExtractedEvent[]): CodexExtractedFile => ({ entry: entry("/fixture/session.jsonl"), snapshotSize: 1, finalSessionId: "session", events });
+const file = (events: CodexExtractedEvent[]): CodexExtractedFile => ({ entry: entry("/fixture/session.jsonl"), snapshotSize: 1, finalSessionId: "session", events, parseErrors: [] });
 
 describe("Codex payload usage overlap", () => {
   it("uses evidence levels, one-to-one matching, and preserves the token invariant", () => {
