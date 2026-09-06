@@ -170,4 +170,20 @@ describe("Codex v5 event decoder", () => {
     expect(result.sessionId).toBe("actual");
     expect(result.events[0]?.sessionId).toBe("actual");
   });
+
+  it("keeps the child identity when parent metadata is replayed in a fork file", () => {
+    const result = decodeCodexFileV5({
+      sourcePath: "/child.jsonl",
+      values: [
+        { type: "session_meta", payload: { id: "child", forked_from_id: "parent" } },
+        { type: "session_meta", payload: { id: "parent" } },
+        { type: "token_count", payload: { info: { last_token_usage: { input_tokens: 3 } } } },
+      ],
+    });
+
+    expect(result.sessionId).toBe("child");
+    expect(result.parentSessionId).toBe("parent");
+    expect(result.diagnostics.sessionIdentityConflicts).toBe(0);
+    expect(result.events.every((event) => event.sessionId === "child")).toBe(true);
+  });
 });

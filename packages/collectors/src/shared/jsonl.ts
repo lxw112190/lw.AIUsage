@@ -3,10 +3,14 @@ export interface JsonlResult<T> {
   pendingText: string;
   errors: string[];
 }
+
+// Codex session metadata and tool events can contain multi-megabyte JSON lines.
+export const DEFAULT_MAX_PENDING_BYTES = 8 * 1024 * 1024;
+
 export function parseJsonl<T>(
   text: string,
   pendingText: string,
-  maxPendingBytes = 512 * 1024,
+  maxPendingBytes = DEFAULT_MAX_PENDING_BYTES,
 ): JsonlResult<T> {
   const combined = pendingText + text;
   const lines = combined.split("\n");

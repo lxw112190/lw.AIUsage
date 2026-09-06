@@ -46,7 +46,7 @@ export interface CodexRecordReconciliation {
 
 export interface CodexAccountingAuditReport {
   auditVersion: 3;
-  auditRevision: 10;
+  auditRevision: 12;
   parserVersion: 4;
   accounting: "codex-accounting-audit-v3";
   generatedAt: number;
@@ -134,7 +134,9 @@ export class CodexAccountingAuditService {
       {
         files: beforeSnapshot.files.map((file) => ({
           ...file,
-          logicalId: resolveCollectorLogicalId(cursorByPath.get(file.path), file.logicalId),
+          // A fresh session_meta identity is authoritative; old cursors can contain
+          // a stale parent id after a fork or archive move.
+          logicalId: file.logicalId ?? resolveCollectorLogicalId(cursorByPath.get(file.path), undefined),
         })),
       },
     );
@@ -177,7 +179,7 @@ export class CodexAccountingAuditService {
     const sessionCountMatched = mirror.sessionCount === database.sessionCount;
     return {
       auditVersion: 3,
-      auditRevision: 10,
+      auditRevision: 12,
       parserVersion: 4,
       accounting: "codex-accounting-audit-v3",
       generatedAt: Date.now(),

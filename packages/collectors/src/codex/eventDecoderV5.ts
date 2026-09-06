@@ -175,6 +175,7 @@ export function decodeCodexFileV5(input: CodexParsedFileInputV5): CodexDecodedFi
   const events: CodexAccountingEvent[] = [];
   const context: CodexDecodeContextV5 = {};
   let fileSessionId = input.logicalIdHint;
+  let firstSessionMetaId: string | undefined;
   let fileParentSessionId: string | undefined;
   let forkTimestamp: number | undefined;
   for (const [eventIndex, rawEvent] of input.values.entries()) {
@@ -207,9 +208,15 @@ export function decodeCodexFileV5(input: CodexParsedFileInputV5): CodexDecodedFi
     const eventType = stringValue(rawEvent.type);
     if (eventType === "session_meta") {
       diagnostics.sessionMetaEvents += 1;
-      if (fileSessionId && sessionId && fileSessionId !== sessionId) diagnostics.sessionIdentityConflicts += 1;
+      const isKnownParentReplay = !!fileParentSessionId && sessionId === fileParentSessionId && firstSessionMetaId !== sessionId;
+      if (!firstSessionMetaId && sessionId) {
+        if (fileSessionId && fileSessionId !== sessionId) diagnostics.sessionIdentityConflicts += 1;
+        firstSessionMetaId = sessionId;
+        fileSessionId = sessionId;
+      } else if (firstSessionMetaId && sessionId && firstSessionMetaId !== sessionId && !isKnownParentReplay) {
+        diagnostics.sessionIdentityConflicts += 1;
+      }
       if (fileParentSessionId && parentSessionId && fileParentSessionId !== parentSessionId) diagnostics.parentIdentityConflicts += 1;
-      fileSessionId = sessionId ?? fileSessionId;
       fileParentSessionId = parentSessionId ?? fileParentSessionId;
       if (fileParentSessionId && timestamp !== undefined) forkTimestamp = forkTimestamp ?? timestamp;
     }

@@ -107,4 +107,15 @@ describe("Codex parser", () => {
     expect(result.values).toHaveLength(1);
     expect(result.pendingText).toContain("partial");
   });
+  it("keeps a multi-megabyte JSON line across read chunks", () => {
+    const line = JSON.stringify({ type: "large", text: "x".repeat(600_000) });
+    const splitAt = 300_000;
+    const first = parseJsonl<{ type: string; text: string }>(line.slice(0, splitAt), "");
+    const second = parseJsonl<{ type: string; text: string }>(`${line.slice(splitAt)}\n`, first.pendingText);
+
+    expect(first.errors).toEqual([]);
+    expect(second.errors).toEqual([]);
+    expect(second.values).toHaveLength(1);
+    expect(second.values[0]?.text).toHaveLength(600_000);
+  });
 });

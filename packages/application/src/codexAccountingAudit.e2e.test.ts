@@ -45,7 +45,7 @@ describe("Codex accounting audit end to end", () => {
     expect(report.raw.usageSources.payloadUsage.events).toBe(3);
     expect(report.raw.usageSources.flatPayloadUsage.events).toBe(1);
     expect(report.raw.usageSources.ignoredNoModel.events).toBe(1);
-    expect(report.auditRevision).toBe(10);
+    expect(report.auditRevision).toBe(12);
     expect(report.parserVersion).toBe(4);
     expect(report.snapshot.sourceStable).toBe(true);
     expect(report.snapshot.databaseStable).toBe(true);
@@ -96,5 +96,34 @@ describe("Codex accounting audit end to end", () => {
     expect(report.v5MigrationValidation.sourceSnapshotStable).toBe(false);
     expect(report.v5MigrationValidation.readyForCollectorSwitch).toBe(false);
     expect(report.v5MigrationValidation.comparison.v4.totalTokens).toBeGreaterThan(0);
+  });
+
+  it("prefers fresh session metadata over a stale cursor logical id", async () => {
+    const path = "/fixture/.codex/archived_sessions/rollout-child.jsonl";
+    const content = [
+      JSON.stringify({ type: "session_meta", payload: { id: "child", forked_from_id: "parent", model: "gpt-5" } }),
+      tokenCount({ model: "gpt-5", info: { last_token_usage: { input_tokens: 12 } } }, "child-token"),
+    ].join("\n") + "\n";
+    const platform = createFixturePlatform({ [path]: content });
+    const repository = new MemoryUsageRepository();
+    const entry = (await platform.fs.list("/fixture/.codex/archived_sessions"))[0]!;
+    await repository.putCursor({
+      key: `codex:${path}`,
+      source: "codex",
+      path,
+      logicalId: "parent",
+      offset: entry.size,
+      size: entry.size,
+      modifiedAt: entry.modifiedAt,
+      pendingText: "",
+      parserVersion: 4,
+    });
+
+    const report = await new CodexAccountingAuditService(platform, repository).audit();
+    const comparison = report.v5MigrationValidation.comparison;
+
+    expect(comparison.conflicts).toEqual([]);
+    expect(comparison.v5.diagnostics.decode.sessionIdentityConflicts).toBe(0);
+    expect(comparison.v5.diagnostics.reconcile.conflictingLogicalSessions).toBe(0);
   });
 });
