@@ -194,7 +194,9 @@ async function runRawAudit(): Promise<void> {
         <div class="audit-breakdown">
           <span>{{ t("settings.v5MappingUnique") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.uniqueRecords.toLocaleString() }}</span>
           <span>{{ t("settings.v5MappingMetadata") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.resolvedByMetadataRecords.toLocaleString() }}</span>
+          <span>{{ t("settings.v5MappingUsageResolved") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.resolvedByUsageRecords.toLocaleString() }}</span>
           <span>{{ t("settings.v5MappingEquivalent") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.equivalentCollisionRecords.toLocaleString() }}</span>
+          <span>{{ t("settings.v5MappingEquivalentUsage") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.equivalentUsageCollisionRecords.toLocaleString() }}</span>
           <span>{{ t("settings.v5MappingAmbiguous") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.ambiguousRecords.toLocaleString() }}</span>
           <span>{{ t("settings.v5MappingUsageUnique") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.ambiguousUsageUniqueMatchRecords.toLocaleString() }}</span>
           <span>{{ t("settings.v5MappingUsageNone") }}: {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.universe.v4RecordMapping.ambiguousUsageNoMatchRecords.toLocaleString() }}</span>
@@ -207,6 +209,7 @@ async function runRawAudit(): Promise<void> {
           <span>{{ t("settings.v5ForkOutside") }}: {{ formatTokens(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.forkEvidence.unexplainedDeltaOutsideForkFamilies) }} Token / {{ usage.codexAccountingAuditReport.v5MigrationValidation.comparison.forkEvidence.unexplainedEventsOutsideForkFamilies.toLocaleString() }}</span>
           <span v-for="pair in usage.codexAccountingAuditReport.v5MigrationValidation.comparison.forkEvidence.pairs.slice(0, 5)" :key="`${pair.parentSessionId}-${pair.childSessionId}`">
             {{ pair.parentSessionId.slice(0, 8) }} → {{ pair.childSessionId.slice(0, 8) }}: {{ t("settings.v5ForkFamilyDelta") }} {{ formatTokens(pair.familyDelta) }} Token / {{ t("settings.v5ForkResidual") }} {{ formatTokens(pair.residualIfDuplicatesSuppressed) }} Token
+            <template v-if="pair.counterResetGap !== undefined"> / {{ t("settings.v5ForkCounterResetGap") }} {{ formatTokens(pair.counterResetGap) }} Token</template>
           </span>
         </div>
         <h3 class="audit-subheading">{{ t("settings.v5Diagnostics") }}</h3>

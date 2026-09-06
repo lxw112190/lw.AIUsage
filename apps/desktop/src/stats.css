@@ -3,13 +3,37 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 22px;
 }
-.compact-table {
+.stats-columns > .panel {
+  min-width: 0;
+  overflow: hidden;
+}
+.stats-table-wrap {
+  max-width: calc(100% + 46px);
   margin: 18px -23px -23px;
-  width: calc(100% + 46px);
+  overflow-x: auto;
+}
+.compact-table {
+  margin: 0;
+  width: 100%;
+  table-layout: fixed;
 }
 .compact-table th,
 .compact-table td {
   padding: 13px 16px;
+}
+.compact-table th:first-child,
+.compact-table td:first-child {
+  width: 34%;
+}
+.compact-table td:first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.compact-table td:first-child strong {
+  display: block;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .compact-table td:last-child,
 .compact-table th:last-child {

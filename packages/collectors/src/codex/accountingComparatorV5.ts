@@ -26,6 +26,7 @@ export type CodexV4V5DeltaReason =
   | "payload-suppression"
   | "payload-fallback"
   | "taxonomy-non-token-usage"
+  | "v4-candidate-collision"
   | "mixed"
   | "v4-only"
   | "v5-only"
@@ -108,6 +109,9 @@ export interface CodexV4MappingDiagnostics {
   resolvedByMetadataRecords: number;
   equivalentCollisionRecords: number;
   equivalentCollisionOccurrences: number;
+  equivalentUsageCollisionRecords: number;
+  equivalentUsageCollisionOccurrences: number;
+  resolvedByUsageRecords: number;
   unmappedRecords: number;
   ambiguousRecords: number;
   ambiguousUsageUniqueMatchRecords: number;
@@ -121,7 +125,9 @@ export interface CodexV4MappingDiagnostics {
 export type CodexV4MappingKind =
   | "unique"
   | "resolved-metadata"
+  | "resolved-usage"
   | "equivalent-collision"
+  | "equivalent-usage-collision"
   | "unmapped"
   | "ambiguous";
 
@@ -131,6 +137,7 @@ export interface CodexV4Candidate {
   sessionId: string;
   rawIdentity: string;
   rawContentFingerprint: string;
+  semanticContentFingerprint: string;
   sourcePath: string;
   eventIndex: number;
   timestamp?: number;
@@ -164,6 +171,9 @@ export interface CodexForkPairComparison {
   childSessionId: string;
   forkTimestamp?: number;
   baselineStatus: string;
+  parentCheckpointTotal?: number;
+  childFirstCumulativeTotal?: number;
+  counterResetGap?: number;
   v4ParentRecords: number;
   v4ChildRecords: number;
   v4ParentTokens: number;
@@ -324,7 +334,7 @@ export interface CodexV4V5ComparatorOptions {
 
 const reasons: CodexV4V5DeltaReason[] = [
   "same", "fork-baseline", "fork-replay", "token-reset", "token-aggregate",
-  "payload-suppression", "payload-fallback", "taxonomy-non-token-usage", "mixed", "v4-only",
+  "payload-suppression", "payload-fallback", "taxonomy-non-token-usage", "v4-candidate-collision", "mixed", "v4-only",
   "v5-only", "usage-changed", "unexplained",
 ];
 
@@ -515,6 +525,17 @@ const mirrorStringAt = (value: unknown, ...keys: string[]): string | undefined =
   return stringValue(current);
 };
 
+const semanticCodexEventForComparison = (raw: unknown): unknown => {
+  const event = objectValue(raw);
+  const payload = objectValue(event?.payload);
+  if (!event || !payload || !("rate_limits" in payload)) return raw;
+  const { rate_limits: _rateLimits, ...stablePayload } = payload;
+  return { ...event, payload: stablePayload };
+};
+
+const semanticCodexContentFingerprintOf = (raw: unknown): string =>
+  stableHash(stableCodexEventJsonV5(semanticCodexEventForComparison(raw)));
+
 const v4CandidateRecordId = (file: CodexExtractedFile, event: CodexExtractedEvent): string => {
   const { payload } = protocolNodes(event);
   const msg = objectValue(payload.msg);
@@ -616,6 +637,7 @@ const buildV4Mapping = (
   v4: ReturnType<typeof replayCodexV4>,
   entries: Map<string, EntryAccumulator>,
   evidenceLimit: number,
+  candidateCollisions: Map<string, { recordId: string; mappingKind: CodexV4MappingKind; representativeRawIdentity: string }>,
 ): CodexV4MappingDiagnostics => {
   const candidates = new Map<string, CodexV4Candidate[]>();
   const eventByKey = recordMetadataOf(files);
@@ -629,6 +651,7 @@ const buildV4Mapping = (
       sessionId: eventSessionId(file, event),
       rawIdentity: rawIdentityOf(event),
       rawContentFingerprint: stableHash(stableCodexEventJsonV5(event.raw)),
+      semanticContentFingerprint: semanticCodexContentFingerprintOf(event.raw),
       sourcePath: file.entry.path,
       eventIndex: event.eventIndex,
       timestamp: eventTimestamp,
@@ -646,6 +669,9 @@ const buildV4Mapping = (
   let resolvedByMetadataRecords = 0;
   let equivalentCollisionRecords = 0;
   let equivalentCollisionOccurrences = 0;
+  let equivalentUsageCollisionRecords = 0;
+  let equivalentUsageCollisionOccurrences = 0;
+  let resolvedByUsageRecords = 0;
   let unmappedRecords = 0;
   let ambiguousRecords = 0;
   let ambiguousUsageUniqueMatchRecords = 0;
@@ -660,6 +686,21 @@ const buildV4Mapping = (
     entry.v4Records.push(record);
     entry.mappingKind = mappingKind;
     entry.mappingCandidateCount = candidateCount;
+  };
+  const recordUnselectedCandidates = (
+    record: ParserV4MirrorRecord,
+    mappingKind: CodexV4MappingKind,
+    representative: CodexV4Candidate,
+    selected: readonly CodexV4Candidate[],
+  ): void => {
+    for (const candidate of selected) {
+      if (candidate.identityKey === representative.identityKey) continue;
+      candidateCollisions.set(candidate.identityKey, {
+        recordId: record.id,
+        mappingKind,
+        representativeRawIdentity: representative.rawIdentity,
+      });
+    }
   };
   const evidenceOf = (record: ParserV4MirrorRecord, mappingKind: CodexV4MappingKind, selected: readonly CodexV4Candidate[]): CodexV4MappingEvidence => {
     const candidates = selected.map((candidate): CodexV4CandidateEvidence => {
@@ -711,6 +752,18 @@ const buildV4Mapping = (
     });
     return usages.every((usage): usage is TokenUsage => !!usage) && usages.slice(1).every((usage) => usageEqual(usages[0]!, usage));
   };
+  const usageMatches = (record: ParserV4MirrorRecord, values: readonly CodexV4Candidate[]): CodexV4Candidate[] => values.filter((candidate) => {
+    const entry = entries.get(candidate.identityKey);
+    return !!entry && entry.afterFork.length > 0 && usageEqual(record.usage, usageOf(entry.afterFork));
+  });
+  const equivalentUsageForComparison = (record: ParserV4MirrorRecord, values: readonly CodexV4Candidate[]): boolean => {
+    if (values.length < 2) return false;
+    const fingerprints = new Set(values.map((candidate) => candidate.semanticContentFingerprint));
+    if (fingerprints.size !== 1) return false;
+    const first = values[0]!;
+    if (!values.every((candidate) => candidate.sessionId === first.sessionId && candidate.timestamp === first.timestamp && candidate.sourceKind === first.sourceKind && candidate.semanticType === first.semanticType)) return false;
+    return usageMatches(record, values).length === values.length;
+  };
   for (const [recordId, record] of v4.records) {
     const recordCandidates = candidates.get(recordId) ?? [];
     if (recordCandidates.length === 0) {
@@ -743,10 +796,29 @@ const buildV4Mapping = (
     if (remaining.length > 1 && equivalentForComparison(remaining)) {
       const representative = [...remaining].sort((left, right) => left.eventIndex - right.eventIndex || left.rawIdentity.localeCompare(right.rawIdentity))[0]!;
       attachRecord(representative, record, "equivalent-collision", remaining.length);
+      recordUnselectedCandidates(record, "equivalent-collision", representative, remaining);
       mappedRecords += 1;
       equivalentCollisionRecords += 1;
       equivalentCollisionOccurrences += remaining.length - 1;
       if (equivalentCollisionExamples.length < evidenceLimit) equivalentCollisionExamples.push(evidenceOf(record, "equivalent-collision", remaining));
+      continue;
+    }
+    const matchingUsageCandidates = usageMatches(record, remaining);
+    if (matchingUsageCandidates.length > 1 && matchingUsageCandidates.length === remaining.length && equivalentUsageForComparison(record, remaining)) {
+      const representative = [...remaining].sort((left, right) => left.eventIndex - right.eventIndex || left.rawIdentity.localeCompare(right.rawIdentity))[0]!;
+      attachRecord(representative, record, "equivalent-usage-collision", remaining.length);
+      recordUnselectedCandidates(record, "equivalent-usage-collision", representative, remaining);
+      mappedRecords += 1;
+      equivalentUsageCollisionRecords += 1;
+      equivalentUsageCollisionOccurrences += remaining.length - 1;
+      if (equivalentCollisionExamples.length < evidenceLimit) equivalentCollisionExamples.push(evidenceOf(record, "equivalent-usage-collision", remaining));
+      continue;
+    }
+    if (matchingUsageCandidates.length === 1) {
+      attachRecord(matchingUsageCandidates[0]!, record, "resolved-usage", remaining.length);
+      recordUnselectedCandidates(record, "resolved-usage", matchingUsageCandidates[0]!, remaining);
+      mappedRecords += 1;
+      resolvedByUsageRecords += 1;
       continue;
     }
     {
@@ -780,6 +852,9 @@ const buildV4Mapping = (
     resolvedByMetadataRecords,
     equivalentCollisionRecords,
     equivalentCollisionOccurrences,
+    equivalentUsageCollisionRecords,
+    equivalentUsageCollisionOccurrences,
+    resolvedByUsageRecords,
     unmappedRecords,
     ambiguousRecords,
     ambiguousUsageUniqueMatchRecords,
@@ -797,6 +872,7 @@ interface CodexComparatorEvidenceContext {
   baselines: Map<string, ForkBaselineResolutionV5>;
   forkReplaySuppressions: Map<string, ForkReplaySuppressionV5[]>;
   payloadSuppressions: Map<string, PayloadSuppression[]>;
+  candidateCollisions: Map<string, { recordId: string; mappingKind: CodexV4MappingKind; representativeRawIdentity: string }>;
 }
 
 const forkSourceOf = (session: CodexComparatorEvidenceContext["reconciled"]["sessions"][number]) => ({
@@ -845,7 +921,7 @@ const buildComparatorEvidenceContext = (
       payloadSuppressions.set(key, list);
     }
   }
-  return { decoded, reconciled, baselines: baselinePlan.resolutions, forkReplaySuppressions, payloadSuppressions };
+  return { decoded, reconciled, baselines: baselinePlan.resolutions, forkReplaySuppressions, payloadSuppressions, candidateCollisions: new Map() };
 };
 
 const collectAttributionSignals = (
@@ -853,6 +929,15 @@ const collectAttributionSignals = (
   context: CodexComparatorEvidenceContext,
 ): CodexAttributionSignal[] => {
   const signals: CodexAttributionSignal[] = [];
+  const candidateCollision = context.candidateCollisions.get(entry.key);
+  if (candidateCollision && entry.v4Records.length === 0 && entry.afterFork.length > 0) {
+    signals.push({
+      reason: "v4-candidate-collision",
+      evidence: candidateCollision.mappingKind,
+      relatedRawIdentity: candidateCollision.representativeRawIdentity,
+      tokens: totalTokens(usageOf(entry.afterFork)),
+    });
+  }
   for (const suppression of context.forkReplaySuppressions.get(entry.key) ?? []) {
     signals.push({
       reason: "fork-replay",
@@ -945,12 +1030,22 @@ const forkEvidenceOf = (
       .flatMap(([, values]) => values);
     const parentDelta = parent.delta;
     const childDelta = childSummary.delta;
+    const baseline = evidence.baselines.get(child.sessionId);
+    const parentCheckpointTotal = baseline?.checkpoint?.aggregateTotal;
+    const childFirstCumulativeTotal = baseline?.firstChildTotalEvent?.tokenCount?.total
+      ? rawCounterTotal(baseline.firstChildTotalEvent.tokenCount.total)
+      : undefined;
     const rawDuplicateCandidateTokens = groups.reduce((sum, group) => sum + group.aggregateTokens * (group.occurrences - 1), 0);
     pairs.push({
       parentSessionId: parent.sessionId,
       childSessionId: childSummary.sessionId,
       forkTimestamp: child.forkTimestamp,
       baselineStatus: evidence.baselines.get(child.sessionId)?.status ?? "unresolved",
+      parentCheckpointTotal,
+      childFirstCumulativeTotal,
+      counterResetGap: parentCheckpointTotal !== undefined && childFirstCumulativeTotal !== undefined
+        ? parentCheckpointTotal - childFirstCumulativeTotal
+        : undefined,
       v4ParentRecords: parent.v4Records,
       v4ChildRecords: childSummary.v4Records,
       v4ParentTokens: parent.v4Tokens,
@@ -1022,7 +1117,7 @@ export function compareCodexV4V5(
       entry.payloadFallbacks.push(fallback);
     }
   }
-  const mapping = buildV4Mapping(files, v4, entries, limit);
+  const mapping = buildV4Mapping(files, v4, entries, limit, evidence.candidateCollisions);
   for (const entry of entries.values()) if (!entry.source) entry.source = sourceByKey.get(entry.key)?.source;
   const comparisonEntries: CodexEventComparisonV5[] = [...entries.values()].map((entry) => {
     const v4Usage = zeroUsage();
@@ -1069,7 +1164,7 @@ export function compareCodexV4V5(
   const unexplainedEntries = changedEntries.filter((entry) => !entry.explained);
   const signalCounts = Object.fromEntries(([
     "fork-baseline", "fork-replay", "token-reset", "token-aggregate",
-    "payload-suppression", "payload-fallback", "taxonomy-non-token-usage",
+    "payload-suppression", "payload-fallback", "taxonomy-non-token-usage", "v4-candidate-collision",
   ] as CodexAttributionSignalReason[]).map((reason) => [
     reason,
     comparisonEntries.reduce((sum, entry) => sum + entry.signals.filter((signal) => signal.reason === reason).length, 0),

@@ -406,10 +406,11 @@ describe("Codex v4-v5 accounting comparator", () => {
     expect(result.universe.v4RecordMapping.ambiguousRecords).toBe(0);
     expect(result.universe.v4RecordMapping.equivalentCollisionExamples[0]?.mappingKind).toBe("equivalent-collision");
     expect(result.comparisonEntries.filter((entry) => entry.v4?.mappingKind === "equivalent-collision")).toHaveLength(1);
-    expect(result.attribution.unexplainedDelta).not.toBe(0);
+    expect(result.comparisonEntries.find((entry) => entry.v4 === undefined)?.reason).toBe("v4-candidate-collision");
+    expect(result.attribution.unexplainedDelta).toBe(0);
   });
 
-  it("does not resolve a same-hash collision when V5 usage differs", () => {
+  it("resolves a collision when exactly one candidate matches V4 usage", () => {
     const first = {
       ...tokenEvent(0, 100, 10),
       raw: { type: "token_count", timestamp: 100, response_id: "same", payload: { model: "gpt-5", info: { total_token_usage: { input_tokens: 10, total_tokens: 10 } } } },
@@ -418,14 +419,36 @@ describe("Codex v4-v5 accounting comparator", () => {
     const result = compareCodexV4V5([file("/sessions/a.jsonl", [first, second])]);
 
     expect(result.universe.v4RecordMapping.equivalentCollisionRecords).toBe(0);
-    expect(result.universe.v4RecordMapping.ambiguousRecords).toBe(1);
-    const evidence = result.universe.v4RecordMapping.ambiguousExamples[0];
-    expect(evidence?.mappingKind).toBe("ambiguous");
-    expect(evidence?.usageMatchCandidates).toBe(1);
-    expect(evidence?.candidates.filter((candidate) => candidate.v4UsageMatchesAfterFork)).toHaveLength(1);
-    expect(result.universe.v4RecordMapping.ambiguousUsageUniqueMatchRecords).toBe(1);
+    expect(result.universe.v4RecordMapping.ambiguousRecords).toBe(0);
+    expect(result.universe.v4RecordMapping.resolvedByUsageRecords).toBe(1);
+    expect(result.comparisonEntries.find((entry) => entry.v4)?.v4?.mappingKind).toBe("resolved-usage");
+    expect(result.universe.v4RecordMapping.ambiguousUsageUniqueMatchRecords).toBe(0);
     expect(result.universe.v4RecordMapping.ambiguousUsageNoMatchRecords).toBe(0);
     expect(result.universe.v4RecordMapping.ambiguousUsageMultipleMatchRecords).toBe(0);
+  });
+
+  it("classifies rate-limit-only collisions as equivalent usage collisions", () => {
+    const first = tokenEvent(0, 100, 10, "same");
+    const second = {
+      ...first,
+      eventIndex: 1,
+      raw: {
+        ...first.raw,
+        payload: {
+          ...(first.raw.payload as Record<string, unknown>),
+          rate_limits: { primary: { used_percent: 20 } },
+        },
+      },
+    };
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [first, second])]);
+
+    expect(result.universe.v4RecordMapping.equivalentCollisionRecords).toBe(0);
+    expect(result.universe.v4RecordMapping.equivalentUsageCollisionRecords).toBe(1);
+    expect(result.universe.v4RecordMapping.equivalentUsageCollisionOccurrences).toBe(1);
+    expect(result.universe.v4RecordMapping.ambiguousRecords).toBe(0);
+    expect(result.comparisonEntries.find((entry) => entry.v4)?.v4?.mappingKind).toBe("equivalent-usage-collision");
+    expect(result.comparisonEntries.find((entry) => entry.v4 === undefined)?.reason).toBe("v4-candidate-collision");
+    expect(result.attribution.unexplainedDelta).toBe(0);
   });
 
   it("reports fork family deltas without changing attribution", () => {
@@ -445,5 +468,41 @@ describe("Codex v4-v5 accounting comparator", () => {
       (result.forkEvidence.pairs[0]?.parentDelta ?? 0) + (result.forkEvidence.pairs[0]?.childDelta ?? 0),
     );
     expect(result.forkEvidence.unexplainedEventsOutsideForkFamilies).toBe(0);
+  });
+
+  it("reports the baseline gap for a child counter reset", () => {
+    const totalEvent = (index: number, timestamp: number, total: number, sessionId: string): CodexExtractedEvent => ({
+      raw: {
+        type: "token_count",
+        timestamp,
+        payload: {
+          model: "gpt-5",
+          info: { total_token_usage: { input_tokens: total, output_tokens: 0, total_tokens: total } },
+        },
+      },
+      eventIndex: index,
+      eventType: "token_count",
+      explicitTimestamp: timestamp * 1000,
+      resolvedModel: "gpt-5",
+      resolvedSessionId: sessionId,
+      source: "token-count",
+      outerType: "token_count",
+      semanticType: "token_count",
+      isTokenCount: true,
+    });
+    const parent = file("/sessions/parent.jsonl", [totalEvent(0, 100, 150, "parent")], "parent");
+    const child = file("/sessions/child.jsonl", [
+      { raw: { type: "session_meta", timestamp: 200, payload: { id: "child", forked_from_id: "parent" } }, eventIndex: 0, eventType: "session_meta", explicitTimestamp: 200_000, resolvedSessionId: "child", forkedFromId: "parent", outerType: "session_meta", semanticType: "session_meta", isTokenCount: false },
+      totalEvent(1, 210, 20, "child"),
+    ], "child");
+
+    const result = compareCodexV4V5([parent, child]);
+
+    expect(result.forkEvidence.pairs[0]).toMatchObject({
+      baselineStatus: "child-counter-reset",
+      parentCheckpointTotal: 150,
+      childFirstCumulativeTotal: 20,
+      counterResetGap: 130,
+    });
   });
 });
