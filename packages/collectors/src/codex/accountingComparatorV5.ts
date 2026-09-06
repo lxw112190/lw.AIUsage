@@ -4,9 +4,10 @@ import type { CodexExtractedEvent, CodexExtractedFile, CodexUsageSource } from "
 import { replayCodexV4 } from "./parserV4Mirror";
 import { decodeCodexFileV5, stableCodexEventJsonV5, type CodexParsedFileInputV5 } from "./eventDecoderV5";
 import { parseCodexFilesV5, type CodexV5ParseResult, type CodexV5SessionParseResult } from "./parserV5";
-import { resolveForkBaselinesV5, type CanonicalUsageContributionV5, type ForkBaselineResolutionV5 } from "./forkReplayV5";
-import { reconcileCodexLogicalSessionsV5 } from "./logicalSessionV5";
+import { resolveForkBaselinesV5, resolveForkReplayV5, type CanonicalUsageContributionV5, type ForkBaselineResolutionV5, type ForkReplaySuppressionV5 } from "./forkReplayV5";
+import { reconcileCodexLogicalSessionsV5, type CodexLogicalSessionReconcileResultV5 } from "./logicalSessionV5";
 import type { CodexAccountingEvent } from "./accountingV5";
+import { payloadUsageCandidateOf, resolvePayloadFallbackV5, type PayloadSuppression } from "./payloadFallbackV5";
 import type { ParserV4MirrorRecord } from "./rawAuditTypes";
 
 export interface CodexComparisonEventIdentity {
@@ -23,6 +24,7 @@ export type CodexV4V5DeltaReason =
   | "payload-suppression"
   | "payload-fallback"
   | "taxonomy-non-token-usage"
+  | "mixed"
   | "v4-only"
   | "v5-only"
   | "usage-changed"
@@ -34,6 +36,16 @@ export interface SignedTokenUsage {
   cacheCreationInputTokens: number;
   outputTokens: number;
   reasoningOutputTokens: number;
+}
+
+export type CodexAttributionSignalReason = Exclude<CodexV4V5DeltaReason, "same" | "mixed" | "v4-only" | "v5-only" | "usage-changed" | "unexplained">;
+
+export interface CodexAttributionSignal {
+  reason: CodexAttributionSignalReason;
+  evidence: string;
+  relatedRawIdentity?: string;
+  relatedSessionId?: string;
+  tokens?: number;
 }
 
 export interface CodexEventComparisonV5 {
@@ -59,6 +71,7 @@ export interface CodexEventComparisonV5 {
   };
   delta: number;
   componentDelta: SignedTokenUsage;
+  signals: CodexAttributionSignal[];
   reason: CodexV4V5DeltaReason;
   explained: boolean;
 }
@@ -142,6 +155,9 @@ export interface CodexV4V5ComparisonReport {
     unexplainedDelta: number;
     changedEvents: number;
     unexplainedEvents: number;
+    mixedEvents: number;
+    mixedDelta: number;
+    signalCounts: Record<CodexAttributionSignalReason, number>;
   };
   sessions: CodexSessionComparisonV5[];
   largestAbsoluteSessionDelta: CodexSessionComparisonV5[];
@@ -161,7 +177,7 @@ export interface CodexV4V5ComparatorOptions {
 
 const reasons: CodexV4V5DeltaReason[] = [
   "same", "fork-baseline", "fork-replay", "token-reset", "token-aggregate",
-  "payload-suppression", "payload-fallback", "taxonomy-non-token-usage", "v4-only",
+  "payload-suppression", "payload-fallback", "taxonomy-non-token-usage", "mixed", "v4-only",
   "v5-only", "usage-changed", "unexplained",
 ];
 
@@ -370,7 +386,25 @@ const buildV4Mapping = (
   return { records: v4.records.size, mappedRecords, unmappedRecords, ambiguousRecords, candidateIdCollisions };
 };
 
-const baselineResolutionMap = (v5: CodexV5ParseResult, files: readonly CodexExtractedFile[]): Map<string, ForkBaselineResolutionV5> => {
+interface CodexComparatorEvidenceContext {
+  decoded: ReturnType<typeof decodeCodexFileV5>[];
+  reconciled: CodexLogicalSessionReconcileResultV5;
+  baselines: Map<string, ForkBaselineResolutionV5>;
+  forkReplaySuppressions: Map<string, ForkReplaySuppressionV5[]>;
+  payloadSuppressions: Map<string, PayloadSuppression[]>;
+}
+
+const forkSourceOf = (session: CodexComparatorEvidenceContext["reconciled"]["sessions"][number]) => ({
+  sessionId: session.sessionId,
+  parentSessionId: session.parentSessionId,
+  forkTimestamp: session.forkTimestamp,
+  events: session.events,
+});
+
+const buildComparatorEvidenceContext = (
+  files: readonly CodexExtractedFile[],
+  v5: CodexV5ParseResult,
+): CodexComparatorEvidenceContext => {
   const decoded = files.map((file) => decodeCodexFileV5({
     sourcePath: file.entry.path,
     logicalIdHint: file.peekLogicalId,
@@ -378,42 +412,93 @@ const baselineResolutionMap = (v5: CodexV5ParseResult, files: readonly CodexExtr
     parseErrors: file.parseErrors,
   }));
   const reconciled = reconcileCodexLogicalSessionsV5(decoded);
-  const plan = resolveForkBaselinesV5(reconciled.sessions.map((session) => ({
+  const baselinePlan = resolveForkBaselinesV5(reconciled.sessions.map(forkSourceOf));
+  const replay = resolveForkReplayV5(v5.sessions.map((session) => ({
     sessionId: session.sessionId,
     parentSessionId: session.parentSessionId,
     forkTimestamp: session.forkTimestamp,
-    events: session.events,
+    contributions: session.canonicalBeforeForkReplay,
   })));
-  void v5;
-  return plan.resolutions;
+  const forkReplaySuppressions = new Map<string, ForkReplaySuppressionV5[]>();
+  for (const session of replay.sessions) for (const suppression of session.suppressed) {
+    const key = comparisonEventKey(session.sessionId, suppression.child.event.rawIdentity);
+    const list = forkReplaySuppressions.get(key) ?? [];
+    list.push(suppression);
+    forkReplaySuppressions.set(key, list);
+  }
+  const payloadSuppressions = new Map<string, PayloadSuppression[]>();
+  const v5Sessions = new Map(v5.sessions.map((session) => [session.sessionId, session]));
+  for (const logical of reconciled.sessions) {
+    const session = v5Sessions.get(logical.sessionId);
+    if (!session) continue;
+    const payloads = logical.events.map(payloadUsageCandidateOf).filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate);
+    const resolved = resolvePayloadFallbackV5(session.tokenCountRefs, payloads);
+    for (const suppression of resolved.suppressed) {
+      const key = comparisonEventKey(logical.sessionId, suppression.payload.event.rawIdentity);
+      const list = payloadSuppressions.get(key) ?? [];
+      list.push(suppression);
+      payloadSuppressions.set(key, list);
+    }
+  }
+  return { decoded, reconciled, baselines: baselinePlan.resolutions, forkReplaySuppressions, payloadSuppressions };
 };
 
-const classify = (
+const collectAttributionSignals = (
+  entry: EntryAccumulator,
+  context: CodexComparatorEvidenceContext,
+): CodexAttributionSignal[] => {
+  const signals: CodexAttributionSignal[] = [];
+  for (const suppression of context.forkReplaySuppressions.get(entry.key) ?? []) {
+    signals.push({
+      reason: "fork-replay",
+      evidence: "matched-parent-prefix",
+      relatedRawIdentity: suppression.parent.event.rawIdentity,
+      relatedSessionId: suppression.parent.event.sessionId,
+      tokens: suppression.suppressedTokens,
+    });
+  }
+  const baseline = context.baselines.get(entry.sessionId);
+  if (baseline?.status === "resolved" && baseline.firstChildTotalEvent?.rawIdentity === entry.rawIdentity) {
+    signals.push({
+      reason: "fork-baseline",
+      evidence: "resolved-parent-checkpoint",
+      relatedRawIdentity: baseline.checkpoint?.event.rawIdentity,
+      relatedSessionId: baseline.checkpoint?.parentSessionId,
+      tokens: baseline.inheritedAggregate,
+    });
+  }
+  for (const suppression of context.payloadSuppressions.get(entry.key) ?? []) {
+    signals.push({
+      reason: "payload-suppression",
+      evidence: suppression.evidence,
+      relatedRawIdentity: suppression.token.event.rawIdentity,
+      relatedSessionId: suppression.token.event.sessionId,
+      tokens: suppression.suppressedTokens,
+    });
+  }
+  if (entry.payloadFallbacks.length > 0) {
+    signals.push({ reason: "payload-fallback", evidence: entry.payloadFallbacks.map((fallback) => fallback.reason).join(",") });
+  }
+  if (entry.source === "nested-info-non-token-count" && entry.v4Records.length > 0 && entry.afterFork.length === 0)
+    signals.push({ reason: "taxonomy-non-token-usage", evidence: "v4-nested-info-on-non-token-count" });
+  if (entry.tokenRef?.method === "total-reset") signals.push({ reason: "token-reset", evidence: "token-count-method-total-reset" });
+  if (entry.tokenRef?.method === "total-aggregate-delta") signals.push({ reason: "token-aggregate", evidence: "token-count-method-total-aggregate-delta" });
+  return signals;
+};
+
+const resolveAttribution = (
   entry: EntryAccumulator,
   v4Usage: TokenUsage,
   v5Usage: TokenUsage,
-  baselines: Map<string, ForkBaselineResolutionV5>,
+  signals: readonly CodexAttributionSignal[],
 ): { reason: CodexV4V5DeltaReason; explained: boolean } => {
-  const delta = totalTokens(v5Usage) - totalTokens(v4Usage);
-  const changed = delta !== 0 || !usageEqual(v4Usage, v5Usage);
+  const changed = !usageEqual(v4Usage, v5Usage);
   if (!changed) return { reason: "same", explained: true };
-  if (entry.beforeFork.length > entry.afterFork.length && entry.afterFork.length === 0)
-    return { reason: "fork-replay", explained: true };
-  const baseline = baselines.get(entry.sessionId);
-  if (baseline?.status === "resolved" && baseline.firstChildTotalEvent?.rawIdentity === entry.rawIdentity)
-    return { reason: "fork-baseline", explained: true };
-  if (entry.source === "nested-info-non-token-count" && entry.afterFork.length === 0)
-    return { reason: "taxonomy-non-token-usage", explained: true };
-  if (entry.payloadFallbacks.length > 0 && entry.v4Records.length === 0)
-    return { reason: "payload-fallback", explained: true };
-  if ((entry.v4Records[0]?.sourceKind === "payload-usage" || entry.v4Records[0]?.sourceKind === "flat-payload") && entry.afterFork.length === 0)
-    return { reason: "payload-suppression", explained: true };
-  if (entry.tokenRef?.method === "total-reset") return { reason: "token-reset", explained: true };
-  if (entry.tokenRef?.method === "total-aggregate" || entry.tokenRef?.method === "total-aggregate-delta")
-    return { reason: "token-aggregate", explained: true };
+  if (signals.length === 1) return { reason: signals[0]!.reason, explained: true };
+  if (signals.length > 1) return { reason: "mixed", explained: false };
   if (entry.v4Records.length === 0) return { reason: "v5-only", explained: false };
   if (entry.afterFork.length === 0) return { reason: "v4-only", explained: false };
-  if (delta !== 0) return { reason: "usage-changed", explained: false };
+  if (totalTokens(v4Usage) !== totalTokens(v5Usage)) return { reason: "usage-changed", explained: false };
   return { reason: "unexplained", explained: false };
 };
 
@@ -433,6 +518,7 @@ export function compareCodexV4V5(
 ): CodexV4V5ComparisonReport {
   const v4 = replayCodexV4(files);
   const v5 = parseCodexFilesV5(codexExtractedFilesToV5Inputs(files));
+  const evidence = buildComparatorEvidenceContext(files, v5);
   const entries = new Map<string, EntryAccumulator>();
   const sourceByKey = recordMetadataOf(files);
   for (const session of v5.sessions) {
@@ -449,13 +535,13 @@ export function compareCodexV4V5(
   }
   const mapping = buildV4Mapping(files, v4, entries);
   for (const entry of entries.values()) if (!entry.source) entry.source = sourceByKey.get(entry.key)?.source;
-  const baselines = baselineResolutionMap(v5, files);
   const comparisonEntries: CodexEventComparisonV5[] = [...entries.values()].map((entry) => {
     const v4Usage = zeroUsage();
     for (const record of entry.v4Records) addUsage(v4Usage, record.usage);
     const beforeUsage = usageOf(entry.beforeFork);
     const afterUsage = usageOf(entry.afterFork);
-    const classification = classify(entry, v4Usage, afterUsage, baselines);
+    const signals = collectAttributionSignals(entry, evidence);
+    const classification = resolveAttribution(entry, v4Usage, afterUsage, signals);
     const timestamp = entry.timestamp ?? entry.afterFork[0]?.event.timestamp ?? entry.beforeFork[0]?.event.timestamp;
     return {
       key: entry.key,
@@ -480,6 +566,7 @@ export function compareCodexV4V5(
       },
       delta: totalTokens(afterUsage) - totalTokens(v4Usage),
       componentDelta: subtractUsageSigned(afterUsage, v4Usage),
+      signals,
       reason: classification.reason,
       explained: classification.explained,
     };
@@ -489,6 +576,14 @@ export function compareCodexV4V5(
   const unexplainedDelta = comparisonEntries.filter((entry) => !entry.explained).reduce((sum, entry) => sum + entry.delta, 0);
   const changedEntries = comparisonEntries.filter((entry) => entry.delta !== 0 || signedNonZero(entry.componentDelta));
   const unexplainedEntries = changedEntries.filter((entry) => !entry.explained);
+  const signalCounts = Object.fromEntries(([
+    "fork-baseline", "fork-replay", "token-reset", "token-aggregate",
+    "payload-suppression", "payload-fallback", "taxonomy-non-token-usage",
+  ] as CodexAttributionSignalReason[]).map((reason) => [
+    reason,
+    comparisonEntries.reduce((sum, entry) => sum + entry.signals.filter((signal) => signal.reason === reason).length, 0),
+  ])) as Record<CodexAttributionSignalReason, number>;
+  const mixedEntries = changedEntries.filter((entry) => entry.reason === "mixed");
   const sessionIds = [...new Set(comparisonEntries.map((entry) => entry.sessionId))].sort();
   const sessions = sessionIds.map((sessionId) => {
     const selected = comparisonEntries.filter((entry) => entry.sessionId === sessionId);
@@ -537,7 +632,16 @@ export function compareCodexV4V5(
     v4: { recordCount: v4.recordCount, sessionCount: v4.sessionCount, usage: v4.usage, totalTokens: totalTokens(v4.usage) },
     v5: { canonicalContributions: v5.sessions.reduce((sum, session) => sum + session.canonicalAfterForkReplay.length, 0), emittedRecords: v5.diagnostics.projection.emittedRecords, canonicalUsage, canonicalTokens: totalTokens(canonicalUsage), emittedTokens: v5.diagnostics.projection.emittedTokens, safeToActivate: v5.safeToActivate },
     difference: { components, accountingTokens, projectionTokens: v5.diagnostics.projection.emittedTokens - totalTokens(canonicalUsage) },
-    attribution: { byReason, explainedDelta, unexplainedDelta, changedEvents: changedEntries.length, unexplainedEvents: unexplainedEntries.length },
+    attribution: {
+      byReason,
+      explainedDelta,
+      unexplainedDelta,
+      changedEvents: changedEntries.length,
+      unexplainedEvents: unexplainedEntries.length,
+      mixedEvents: mixedEntries.length,
+      mixedDelta: mixedEntries.reduce((sum, entry) => sum + entry.delta, 0),
+      signalCounts,
+    },
     sessions,
     largestAbsoluteSessionDelta: [...sessions].sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.sessionId.localeCompare(right.sessionId)).slice(0, 20),
     details: { unexplained: unexplainedEntries.slice(0, limit), largestChanges: [...changedEntries].sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.key.localeCompare(right.key)).slice(0, limit), examplesByReason },

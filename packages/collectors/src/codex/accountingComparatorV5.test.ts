@@ -118,6 +118,122 @@ describe("Codex v4-v5 accounting comparator", () => {
     expect(result.gates.accountingBalanced).toBe(true);
   });
 
+  it("uses direct same-response payload suppression evidence", () => {
+    const payload: CodexExtractedEvent = {
+      raw: {
+        type: "response_item",
+        timestamp: 101,
+        payload: { model: "gpt-5", response_id: "r", usage: { input_tokens: 10, output_tokens: 0 } },
+      },
+      eventIndex: 1,
+      eventType: "response_item",
+      explicitTimestamp: 101_000,
+      resolvedModel: "gpt-5",
+      resolvedSessionId: "session",
+      source: "payload-usage",
+      outerType: "response_item",
+      semanticType: "response_item",
+      isTokenCount: false,
+    };
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [tokenEvent(0, 100, 10, "r"), payload])]);
+    const suppressed = result.comparisonEntries.find((entry) => entry.rawIdentity.includes("e1:"));
+
+    expect(suppressed?.signals).toEqual([expect.objectContaining({
+      reason: "payload-suppression",
+      evidence: "same-response-id-components",
+    })]);
+    expect(suppressed?.reason).toBe("payload-suppression");
+    expect(suppressed?.explained).toBe(true);
+  });
+
+  it("marks an event with fork baseline and payload fallback as mixed", () => {
+    const parent = file("/sessions/parent.jsonl", [{
+      ...tokenEvent(0, 100, 150),
+      raw: { type: "token_count", timestamp: 100, payload: { model: "gpt-5", info: { total_token_usage: { total_tokens: 150 } } } },
+    }], "parent");
+    const child = file("/sessions/child.jsonl", [
+      {
+        raw: { type: "session_meta", timestamp: 200, payload: { id: "child", forked_from_id: "parent" } },
+        eventIndex: 0,
+        eventType: "session_meta",
+        explicitTimestamp: 200_000,
+        resolvedSessionId: "child",
+        forkedFromId: "parent",
+        outerType: "session_meta",
+        semanticType: "session_meta",
+        isTokenCount: false,
+      },
+      {
+        raw: {
+          type: "token_count",
+          timestamp: 210,
+          payload: {
+            model: "gpt-5",
+            info: {
+              last_token_usage: { input_tokens: 30, output_tokens: 0 },
+              total_token_usage: { total_tokens: 180 },
+            },
+            usage: { input_tokens: 10, output_tokens: 0 },
+          },
+        },
+        eventIndex: 1,
+        eventType: "token_count",
+        explicitTimestamp: 210_000,
+        resolvedModel: "gpt-5",
+        resolvedSessionId: "child",
+        source: "token-count",
+        outerType: "token_count",
+        semanticType: "token_count",
+        isTokenCount: true,
+      },
+    ], "child");
+    const result = compareCodexV4V5([parent, child]);
+    const mixed = result.comparisonEntries.find((entry) => entry.sessionId === "child" && entry.eventIndex === 1);
+
+    expect(mixed?.signals.map((signal) => signal.reason)).toEqual(["fork-baseline", "payload-fallback"]);
+    expect(mixed?.reason).toBe("mixed");
+    expect(mixed?.explained).toBe(false);
+    expect(result.attribution.mixedEvents).toBe(1);
+    expect(result.gates.attributionComplete).toBe(false);
+    expect(result.readyForCollectorSwitch).toBe(false);
+  });
+
+  it("does not call a component-only difference same", () => {
+    const first: CodexExtractedEvent = {
+      raw: { type: "token_count", timestamp: 100, payload: { model: "gpt-5", info: { total_token_usage: { total_tokens: 100 } } } },
+      eventIndex: 0,
+      eventType: "token_count",
+      explicitTimestamp: 100_000,
+      resolvedModel: "gpt-5",
+      resolvedSessionId: "session",
+      source: "token-count",
+      outerType: "token_count",
+      semanticType: "token_count",
+      isTokenCount: true,
+    };
+    const second: CodexExtractedEvent = {
+      raw: { type: "token_count", timestamp: 110, payload: { model: "gpt-5", info: { total_token_usage: { total_tokens: 200, cached_input_tokens: 100 } } } },
+      eventIndex: 1,
+      eventType: "token_count",
+      explicitTimestamp: 110_000,
+      resolvedModel: "gpt-5",
+      resolvedSessionId: "session",
+      source: "token-count",
+      outerType: "token_count",
+      semanticType: "token_count",
+      isTokenCount: true,
+    };
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [first, second])]);
+    const changed = result.comparisonEntries.find((entry) => entry.eventIndex === 1);
+
+    expect(changed?.delta).toBe(0);
+    expect(changed?.componentDelta.inputTokens).toBe(100);
+    expect(changed?.componentDelta.cachedInputTokens).toBe(-100);
+    expect(result.attribution.changedEvents).toBe(1);
+    expect(changed?.reason).toBe("token-aggregate");
+    expect(changed?.explained).toBe(true);
+  });
+
   it("keeps projection loss separate from accounting delta for a missing timestamp", () => {
     const result = compareCodexV4V5([file("/sessions/a.jsonl", [{
       ...tokenEvent(0, 0, 100, "missing-time"),
