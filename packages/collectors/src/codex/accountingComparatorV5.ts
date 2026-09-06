@@ -6,7 +6,7 @@ import { decodeCodexFileV5, stableCodexEventJsonV5, type CodexParsedFileInputV5 
 import { parseCodexFilesV5, type CodexV5ParseResult, type CodexV5SessionParseResult } from "./parserV5";
 import { resolveForkBaselinesV5, resolveForkReplayV5, type CanonicalUsageContributionV5, type ForkBaselineResolutionV5, type ForkReplaySuppressionV5 } from "./forkReplayV5";
 import { reconcileCodexLogicalSessionsV5, type CodexLogicalSessionReconcileResultV5 } from "./logicalSessionV5";
-import type { CodexAccountingEvent } from "./accountingV5";
+import { deriveTokenCountContribution, type CodexAccountingEvent } from "./accountingV5";
 import { payloadUsageCandidateOf, resolvePayloadFallbackV5, type PayloadSuppression } from "./payloadFallbackV5";
 import type { ParserV4MirrorRecord } from "./rawAuditTypes";
 
@@ -459,13 +459,19 @@ const collectAttributionSignals = (
   }
   const baseline = context.baselines.get(entry.sessionId);
   if (baseline?.status === "resolved" && baseline.firstChildTotalEvent?.rawIdentity === entry.rawIdentity) {
-    signals.push({
-      reason: "fork-baseline",
-      evidence: "resolved-parent-checkpoint",
-      relatedRawIdentity: baseline.checkpoint?.event.rawIdentity,
-      relatedSessionId: baseline.checkpoint?.parentSessionId,
-      tokens: baseline.inheritedAggregate,
-    });
+    const seeded = baseline.initialState
+      ? deriveTokenCountContribution(baseline.firstChildTotalEvent, baseline.initialState)
+      : undefined;
+    const standalone = deriveTokenCountContribution(baseline.firstChildTotalEvent, { segment: 0 });
+    if (seeded && standalone && !usageEqual(seeded.usage, standalone.usage)) {
+      signals.push({
+        reason: "fork-baseline",
+        evidence: "seeded-contribution-differs",
+        relatedRawIdentity: baseline.checkpoint?.event.rawIdentity,
+        relatedSessionId: baseline.checkpoint?.parentSessionId,
+        tokens: totalTokens(seeded.usage) - totalTokens(standalone.usage),
+      });
+    }
   }
   for (const suppression of context.payloadSuppressions.get(entry.key) ?? []) {
     signals.push({
@@ -476,13 +482,15 @@ const collectAttributionSignals = (
       tokens: suppression.suppressedTokens,
     });
   }
-  if (entry.payloadFallbacks.length > 0) {
+  const hasKeptPayloadFallback = entry.afterFork.some((contribution) => contribution.sourceKind === "payload-fallback");
+  if (hasKeptPayloadFallback && entry.payloadFallbacks.length > 0) {
     signals.push({ reason: "payload-fallback", evidence: entry.payloadFallbacks.map((fallback) => fallback.reason).join(",") });
   }
   if (entry.source === "nested-info-non-token-count" && entry.v4Records.length > 0 && entry.afterFork.length === 0)
     signals.push({ reason: "taxonomy-non-token-usage", evidence: "v4-nested-info-on-non-token-count" });
-  if (entry.tokenRef?.method === "total-reset") signals.push({ reason: "token-reset", evidence: "token-count-method-total-reset" });
-  if (entry.tokenRef?.method === "total-aggregate-delta") signals.push({ reason: "token-aggregate", evidence: "token-count-method-total-aggregate-delta" });
+  const hasKeptTokenCount = entry.afterFork.some((contribution) => contribution.sourceKind === "token-count");
+  if (hasKeptTokenCount && entry.tokenRef?.method === "total-reset") signals.push({ reason: "token-reset", evidence: "token-count-method-total-reset" });
+  if (hasKeptTokenCount && entry.tokenRef?.method === "total-aggregate-delta") signals.push({ reason: "token-aggregate", evidence: "token-count-method-total-aggregate-delta" });
   return signals;
 };
 
@@ -494,8 +502,9 @@ const resolveAttribution = (
 ): { reason: CodexV4V5DeltaReason; explained: boolean } => {
   const changed = !usageEqual(v4Usage, v5Usage);
   if (!changed) return { reason: "same", explained: true };
-  if (signals.length === 1) return { reason: signals[0]!.reason, explained: true };
-  if (signals.length > 1) return { reason: "mixed", explained: false };
+  const signalReasons = [...new Set(signals.map((signal) => signal.reason))];
+  if (signalReasons.length === 1) return { reason: signalReasons[0]!, explained: true };
+  if (signalReasons.length > 1) return { reason: "mixed", explained: false };
   if (entry.v4Records.length === 0) return { reason: "v5-only", explained: false };
   if (entry.afterFork.length === 0) return { reason: "v4-only", explained: false };
   if (totalTokens(v4Usage) !== totalTokens(v5Usage)) return { reason: "usage-changed", explained: false };

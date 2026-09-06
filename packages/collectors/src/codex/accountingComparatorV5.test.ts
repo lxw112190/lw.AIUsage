@@ -149,7 +149,7 @@ describe("Codex v4-v5 accounting comparator", () => {
   it("marks an event with fork baseline and payload fallback as mixed", () => {
     const parent = file("/sessions/parent.jsonl", [{
       ...tokenEvent(0, 100, 150),
-      raw: { type: "token_count", timestamp: 100, payload: { model: "gpt-5", info: { total_token_usage: { total_tokens: 150 } } } },
+      raw: { type: "token_count", timestamp: 100, payload: { model: "gpt-5", info: { total_token_usage: { input_tokens: 150, output_tokens: 0, total_tokens: 150 } } } },
     }], "parent");
     const child = file("/sessions/child.jsonl", [
       {
@@ -170,8 +170,7 @@ describe("Codex v4-v5 accounting comparator", () => {
           payload: {
             model: "gpt-5",
             info: {
-              last_token_usage: { input_tokens: 30, output_tokens: 0 },
-              total_token_usage: { total_tokens: 180 },
+              total_token_usage: { input_tokens: 180, output_tokens: 0, total_tokens: 180 },
             },
             usage: { input_tokens: 10, output_tokens: 0 },
           },
@@ -196,6 +195,78 @@ describe("Codex v4-v5 accounting comparator", () => {
     expect(result.attribution.mixedEvents).toBe(1);
     expect(result.gates.attributionComplete).toBe(false);
     expect(result.readyForCollectorSwitch).toBe(false);
+  });
+
+  it("does not attribute a fork baseline when last usage makes its effect zero", () => {
+    const parent = file("/sessions/parent.jsonl", [{
+      ...tokenEvent(0, 100, 150),
+      raw: { type: "token_count", timestamp: 100, payload: { model: "gpt-5", info: { total_token_usage: { total_tokens: 150 } } } },
+    }], "parent");
+    const child = file("/sessions/child.jsonl", [
+      {
+        raw: { type: "session_meta", timestamp: 200, payload: { id: "child", forked_from_id: "parent" } },
+        eventIndex: 0,
+        eventType: "session_meta",
+        explicitTimestamp: 200_000,
+        resolvedSessionId: "child",
+        forkedFromId: "parent",
+        outerType: "session_meta",
+        semanticType: "session_meta",
+        isTokenCount: false,
+      },
+      {
+        raw: { type: "token_count", timestamp: 210, payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 30, output_tokens: 0 }, total_token_usage: { total_tokens: 180 } } } },
+        eventIndex: 1,
+        eventType: "token_count",
+        explicitTimestamp: 210_000,
+        resolvedModel: "gpt-5",
+        resolvedSessionId: "child",
+        source: "token-count",
+        outerType: "token_count",
+        semanticType: "token_count",
+        isTokenCount: true,
+      },
+    ], "child");
+    const result = compareCodexV4V5([parent, child]);
+    const childEvent = result.comparisonEntries.find((entry) => entry.sessionId === "child" && entry.eventIndex === 1);
+
+    expect(childEvent?.signals.some((signal) => signal.reason === "fork-baseline")).toBe(false);
+    expect(childEvent?.reason).toBe("same");
+  });
+
+  it("does not report a payload fallback signal after fork replay removes it", () => {
+    const payloadEvent = (index: number, sessionId: string): CodexExtractedEvent => ({
+      raw: { type: "response_item", timestamp: 100, payload: { model: "gpt-5", response_id: "replay", usage: { input_tokens: 10, output_tokens: 0 } } },
+      eventIndex: index,
+      eventType: "response_item",
+      explicitTimestamp: 100_000,
+      resolvedModel: "gpt-5",
+      resolvedSessionId: sessionId,
+      source: "payload-usage",
+      outerType: "response_item",
+      semanticType: "response_item",
+      isTokenCount: false,
+    });
+    const parent = file("/sessions/parent.jsonl", [payloadEvent(0, "parent")], "parent");
+    const child = file("/sessions/child.jsonl", [
+      {
+        raw: { type: "session_meta", timestamp: 300, payload: { id: "child", forked_from_id: "parent" } },
+        eventIndex: 0,
+        eventType: "session_meta",
+        explicitTimestamp: 300_000,
+        resolvedSessionId: "child",
+        forkedFromId: "parent",
+        outerType: "session_meta",
+        semanticType: "session_meta",
+        isTokenCount: false,
+      },
+      payloadEvent(1, "child"),
+    ], "child");
+    const result = compareCodexV4V5([parent, child]);
+    const childReplay = result.comparisonEntries.find((entry) => entry.sessionId === "child" && entry.eventIndex === 1);
+
+    expect(childReplay?.signals.map((signal) => signal.reason)).toEqual(["fork-replay"]);
+    expect(childReplay?.reason).toBe("fork-replay");
   });
 
   it("does not call a component-only difference same", () => {
