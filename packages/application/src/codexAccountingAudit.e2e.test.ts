@@ -52,9 +52,10 @@ describe("Codex accounting audit end to end", () => {
     expect(report.raw.usageSources.payloadUsage.events).toBe(3);
     expect(report.raw.usageSources.flatPayloadUsage.events).toBe(1);
     expect(report.raw.usageSources.ignoredNoModel.events).toBe(1);
-    expect(report.auditRevision).toBe(19);
+    expect(report.auditRevision).toBe(20);
     expect(report.candidateAccountingRevision).toBe(2);
     expect(report.productionParserVersion).toBe(5);
+    expect(report.productionScanRevision).toBe(1);
     expect(report.parserVersion).toBe(5);
     expect(report.snapshot.sourceStable).toBe(true);
     expect(report.snapshot.databaseStable).toBe(true);

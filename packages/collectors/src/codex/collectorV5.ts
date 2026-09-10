@@ -58,13 +58,28 @@ export function sameCodexSourceSnapshotV5(
 
 const diagnosticsOf = (parsed: ReturnType<typeof parseCodexFilesV5>): string[] => {
   const diagnostics: string[] = [];
+  const pushCount = (code: string, count: number): void => {
+    if (count > 0) diagnostics.push(code + ":" + count);
+  };
   if (parsed.diagnostics.source.parseErrorCount > 0) diagnostics.push(`CODEX_V5_PARSE_ERRORS:${parsed.diagnostics.source.parseErrorCount}`);
   if (parsed.diagnostics.source.filesWithPendingText > 0) diagnostics.push(`CODEX_V5_PENDING_FILES:${parsed.diagnostics.source.filesWithPendingText}`);
   if (parsed.diagnostics.reconcile.conflictingLogicalSessions > 0) diagnostics.push(`CODEX_V5_LOGICAL_CONFLICTS:${parsed.diagnostics.reconcile.conflictingLogicalSessions}`);
   if (parsed.diagnostics.reconcile.orphanFiles > 0) diagnostics.push(`CODEX_V5_ORPHAN_FILES:${parsed.diagnostics.reconcile.orphanFiles}`);
   if (parsed.diagnostics.tokenCount.methods.unresolved > 0) diagnostics.push(`CODEX_V5_UNRESOLVED_TOKEN_COUNTS:${parsed.diagnostics.tokenCount.methods.unresolved}`);
+  pushCount("CODEX_V5_SESSION_IDENTITY_CONFLICTS", parsed.diagnostics.decode.sessionIdentityConflicts);
+  pushCount("CODEX_V5_PARENT_IDENTITY_CONFLICTS", parsed.diagnostics.decode.parentIdentityConflicts);
+  pushCount("CODEX_V5_UNRESOLVED_SEMANTIC_DUPLICATES", parsed.diagnostics.tokenCount.duplicateEvidence.unresolvedPairs);
+  pushCount("CODEX_V5_DUPLICATE_CONFLICTS", parsed.diagnostics.tokenCount.duplicateConflicts);
+  pushCount("CODEX_V5_FORK_MISSING_PARENT", parsed.diagnostics.forkBaseline.missingParentSessions);
+  pushCount("CODEX_V5_FORK_MISSING_TIMESTAMP", parsed.diagnostics.forkBaseline.missingForkTimestampSessions);
+  pushCount("CODEX_V5_FORK_MISSING_PARENT_CHECKPOINT", parsed.diagnostics.forkBaseline.missingParentCheckpointSessions);
+  pushCount("CODEX_V5_FORK_MISSING_CHILD_TOTAL_TIMESTAMP", parsed.diagnostics.forkBaseline.missingChildTotalTimestampSessions);
+  pushCount("CODEX_V5_FORK_INCOMPARABLE", parsed.diagnostics.forkBaseline.incomparableBaselineSessions);
+  pushCount("CODEX_V5_FORK_CYCLE", parsed.diagnostics.forkBaseline.cycleSessions);
+  pushCount("CODEX_V5_FORK_CONFLICTING_PARENT", parsed.diagnostics.forkBaseline.conflictingParentSessions);
+  pushCount("CODEX_V5_FORK_REPLAY_PREFIX_MISMATCH", parsed.diagnostics.forkReplay.replayPrefixMismatchSessions);
   if (parsed.diagnostics.projection.missingTimestampContributions > 0) diagnostics.push(`CODEX_V5_MISSING_TIMESTAMPS:${parsed.diagnostics.projection.missingTimestampContributions}`);
-  if (!parsed.safeToActivate && diagnostics.length === 0) diagnostics.push("CODEX_V5_UNSAFE");
+  if (!parsed.safeToActivate && diagnostics.length === 0) diagnostics.push("CODEX_V5_UNSAFE_UNMAPPED");
   return diagnostics;
 };
 
@@ -72,6 +87,7 @@ export class CodexCollectorV5 implements SourceCollector {
   readonly source = "codex" as const;
   readonly name = "Codex";
   readonly parserVersion = 5;
+  readonly scanRevision = 1;
   readonly scanMode = "source" as const;
 
   async roots(context: CollectorContext): Promise<string[]> {
@@ -119,6 +135,7 @@ export class CodexCollectorV5 implements SourceCollector {
         modifiedAt: file.modifiedAt,
         pendingText: "",
         parserVersion: this.parserVersion,
+        scanRevision: this.scanRevision,
       })),
       diagnostics,
       safeToCommit: true,

@@ -191,6 +191,7 @@ export function sourceNeedsScan(
     const cursor = cursorByPath.get(file.path);
     if (!cursor) return true;
     if (cursor.parserVersion !== collector.parserVersion) return true;
+    if ((cursor.scanRevision ?? 0) !== (collector.scanRevision ?? 0)) return true;
     if (cursor.size !== file.size || cursor.modifiedAt !== file.modifiedAt) return true;
     if (cursor.offset !== file.size || cursor.pendingText !== "") return true;
     if (cursor.logicalId !== file.logicalId) return true;

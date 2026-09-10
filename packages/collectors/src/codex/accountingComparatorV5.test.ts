@@ -49,7 +49,7 @@ describe("Codex v4-v5 accounting comparator", () => {
       tokenEvent(1, 110, 20, "b"),
     ])]);
 
-    expect(result.comparatorVersion).toBe(5);
+    expect(result.comparatorVersion).toBe(6);
     expect(result.v4.totalTokens).toBe(30);
     expect(result.v5.canonicalTokens).toBe(30);
     expect(result.difference.accountingTokens).toBe(0);
@@ -71,7 +71,7 @@ describe("Codex v4-v5 accounting comparator", () => {
     };
     const result = compareCodexV4V5([file("/sessions/a.jsonl", [first, second])]);
 
-    expect(result.comparisonComplete).toBe(true);
+    expect(result.comparisonComplete).toBe(false);
     expect(result.productionSemantics).toMatchObject({
       tokenCountDuplicateSemantics: false,
       unresolvedSemanticCandidates: 1,

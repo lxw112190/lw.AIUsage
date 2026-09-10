@@ -120,6 +120,7 @@ export interface CodexV5ActivationGates {
   sessionIdentity: boolean;
   timestampCompleteness: boolean;
   tokenCountCompleteness: boolean;
+  tokenCountDuplicateSemantics: boolean;
   forkResolution: boolean;
 }
 
@@ -377,7 +378,8 @@ const buildActivationGates = (
   sourceIntegrity: source.parseErrorCount === 0 && source.filesWithPendingText === 0,
   sessionIdentity: decode.sessionIdentityConflicts === 0 && decode.parentIdentityConflicts === 0,
   timestampCompleteness: projection.missingTimestampContributions === 0 && projection.missingTimestampTokens === 0,
-  tokenCountCompleteness: tokenCount.methods.unresolved === 0 && tokenCount.duplicateConflicts === 0,
+  tokenCountCompleteness: tokenCount.methods.unresolved === 0,
+  tokenCountDuplicateSemantics: tokenCount.duplicateConflicts === 0 && tokenCount.duplicateEvidence.unresolvedPairs === 0,
   forkResolution: baseline.missingParentSessions === 0 &&
     baseline.missingForkTimestampSessions === 0 &&
     baseline.missingParentCheckpointSessions === 0 &&

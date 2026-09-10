@@ -322,7 +322,7 @@ export interface CodexProductionSemanticValidation {
 }
 
 export interface CodexV4V5ComparisonReport {
-  comparatorVersion: 5;
+  comparatorVersion: 6;
   snapshot: { files: number };
   universe: CodexComparisonUniverse;
   v4: {
@@ -1389,7 +1389,7 @@ export function compareCodexV4V5(
   const examplesByReason = emptyExamples();
   for (const reason of reasons) examplesByReason[reason] = comparisonEntries.filter((entry) => entry.reason === reason).slice().sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.key.localeCompare(right.key)).slice(0, limit);
   return {
-    comparatorVersion: 5,
+    comparatorVersion: 6,
     snapshot: { files: files.length },
     universe,
     v4: { recordCount: v4.recordCount, sessionCount: v4.sessionCount, usage: v4.usage, totalTokens: totalTokens(v4.usage) },

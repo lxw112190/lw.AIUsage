@@ -48,11 +48,12 @@ export interface CodexRecordReconciliation {
 
 export interface CodexAccountingAuditReport {
   auditVersion: 3;
-  auditRevision: 19;
+  auditRevision: 20;
   candidateAccountingRevision: 2;
   baselineParserVersion: 4;
   candidateParserVersion: 5;
   productionParserVersion: 5;
+  productionScanRevision: 1;
   /** @deprecated Use the explicit baseline/candidate/production version fields. */
   parserVersion: 5;
   accounting: "codex-accounting-audit-v3";
@@ -199,11 +200,12 @@ export class CodexAccountingAuditService {
     const sessionCountMatched = productionSessionCount === database.sessionCount;
     return {
       auditVersion: 3,
-      auditRevision: 19,
+      auditRevision: 20,
       candidateAccountingRevision: 2,
       baselineParserVersion: 4,
       candidateParserVersion: 5,
       productionParserVersion: 5,
+      productionScanRevision: 1,
       parserVersion: 5,
       accounting: "codex-accounting-audit-v3",
       generatedAt: Date.now(),

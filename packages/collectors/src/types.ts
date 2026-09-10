@@ -64,6 +64,8 @@ export interface CollectorBase {
   readonly source: AgentSource;
   readonly name: string;
   readonly parserVersion: number;
+  /** Validation policy revision for the committed source snapshot. */
+  readonly scanRevision?: number;
   detect(context: CollectorContext): Promise<CollectorDetection>;
   roots(context: CollectorContext): Promise<string[]>;
   discoverFiles(context: CollectorContext): Promise<CollectorFile[]>;

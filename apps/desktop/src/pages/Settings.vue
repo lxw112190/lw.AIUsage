@@ -182,6 +182,8 @@ async function runRawAudit(): Promise<void> {
           <span>{{ t("settings.v5GateUniverse") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.universeComparable) }}</span>
           <span>{{ t("settings.v5GateInvariants") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.v5ParserInvariants) }}</span>
           <span>{{ t("settings.v5GateActivation") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.v5Activation) }}</span>
+          <span>{{ t("settings.v5GateDuplicateSemantics") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.productionSemantics.tokenCountDuplicateSemantics) }}</span>
+          <span>{{ t("settings.v5ScanRevision") }}</span><strong>1</strong>
           <span>{{ t("settings.v5GateMapping") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.v4MappingComplete) }}</span>
           <span>{{ t("settings.v5GateAttribution") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.attributionComplete) }}</span>
           <span>{{ t("settings.v5GateBalanced") }} {{ gateMark(usage.codexAccountingAuditReport.v5MigrationValidation.comparison.gates.accountingBalanced) }}</span>

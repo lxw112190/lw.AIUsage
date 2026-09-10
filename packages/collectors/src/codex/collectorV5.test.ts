@@ -19,7 +19,26 @@ describe("Codex V5 source collector", () => {
     expect(result.records).toHaveLength(1);
     expect(result.records[0]?.usage.inputTokens).toBe(12);
     expect(result.cursors).toEqual([expect.objectContaining({ parserVersion: 5, offset: files[0]!.size, pendingText: "", logicalId: "session-a" })]);
+    expect(result.cursors[0]?.scanRevision).toBe(1);
     expect(result.cursors[0]).not.toHaveProperty("parserState");
+  });
+
+  it("blocks an unresolved semantic duplicate and returns no snapshot", async () => {
+    const unresolved = [
+      JSON.stringify({ type: "session_meta", payload: { id: "session-a" }, timestamp: 90 }),
+      JSON.stringify({ type: "token_count", timestamp: 100, payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 100 }, total_token_usage: { input_tokens: 100, output_tokens: 0, total_tokens: 100 } } } }),
+      JSON.stringify({ type: "token_count", timestamp: 110, payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 70 }, total_token_usage: { input_tokens: 180, output_tokens: 0, total_tokens: 180 } } } }),
+      JSON.stringify({ type: "token_count", timestamp: 110, payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 60 }, total_token_usage: { input_tokens: 180, output_tokens: 0, total_tokens: 180 } } } }),
+    ].join("\n") + "\n";
+    const platform = createFixturePlatform({ "/fixture/.codex/sessions/a.jsonl": unresolved });
+    const collector = new CodexCollectorV5();
+    const files = await collector.discoverFiles({ platform });
+    const result = await collector.scanSource({ platform, files, cursors: [] });
+
+    expect(result.safeToCommit).toBe(false);
+    expect(result.records).toEqual([]);
+    expect(result.cursors).toEqual([]);
+    expect(result.diagnostics).toContain("CODEX_V5_UNRESOLVED_SEMANTIC_DUPLICATES:1");
   });
 
   it("does not use a historical cursor to invent a missing raw session identity", async () => {

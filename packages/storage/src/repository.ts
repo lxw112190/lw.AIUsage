@@ -18,6 +18,8 @@ export interface FileCursor {
   modifiedAt: number;
   pendingText: string;
   parserVersion: number;
+  /** Collector validation policy that approved this committed snapshot. */
+  scanRevision?: number;
   parserState?: UsageParserState;
 }
 export interface CommitScanOptions {

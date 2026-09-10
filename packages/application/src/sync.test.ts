@@ -149,6 +149,33 @@ describe("SyncManager", () => {
     expect(await repository.getCursors()).toEqual([cursor]);
   });
 
+  it("forces a source rescan when validation revision changes", async () => {
+    const file: CollectorFile = { path: "/fixture/.codex/sessions/demo.jsonl", name: "demo.jsonl", isFile: true, isDirectory: false, size: 10, modifiedAt: 1, source: "codex", logicalId: "session" };
+    const repository = new MemoryUsageRepository();
+    const cursor = { key: `codex:${file.path}`, source: "codex" as const, path: file.path, logicalId: file.logicalId, offset: file.size, size: file.size, modifiedAt: file.modifiedAt, pendingText: "", parserVersion: 5, scanRevision: 0 };
+    await repository.putCursor(cursor);
+    let scans = 0;
+    const collector: Collector = {
+      source: "codex",
+      name: "Codex V5 revision test",
+      parserVersion: 5,
+      scanRevision: 1,
+      scanMode: "source",
+      roots: async () => [],
+      detect: async () => ({ installed: true, dataAvailable: true, roots: [] }),
+      discoverFiles: async () => [file],
+      scanSource: async () => {
+        scans += 1;
+        return { records: [], cursors: [cursor], diagnostics: [], safeToCommit: true };
+      },
+    };
+    const result = await new SyncManager(createFixturePlatform({}), repository, [collector]).sync();
+
+    expect(result.skipped).toBe(0);
+    expect(scans).toBe(1);
+    expect((await repository.getCursors())[0]?.scanRevision).toBe(0);
+  });
+
   it("migrates, restarts, rebuilds, appends, archives, and deletes a V5 source deterministically", async () => {
     const firstContent = [
       JSON.stringify({ type: "session_meta", payload: { id: "session-a", cwd: "/repo" } }),

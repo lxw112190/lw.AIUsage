@@ -292,6 +292,7 @@ describe("Codex v5 parser pipeline", () => {
     const child = result.sessions.find((session) => session.sessionId === "child");
 
     expect(result.diagnostics.tokenCount).toMatchObject({ semanticSnapshotDuplicateEvents: 1, duplicateConflicts: 0 });
+    expect(result.diagnostics.activation.tokenCountDuplicateSemantics).toBe(true);
     expect(result.diagnostics.forkBaseline).toMatchObject({ forkSessions: 1, resolvedBaselineSessions: 1 });
     expect(result.diagnostics.invariants).toMatchObject({ tokenCountDuplicateEvent: true, forkContribution: true, forkToken: true });
     expect(child?.canonicalBeforeForkReplay.map((item) => item.aggregateTotal)).toEqual([20, 60, 20]);
@@ -366,6 +367,21 @@ describe("Codex v5 parser pipeline", () => {
 
     expect(result.diagnostics.tokenCount.methods.unresolved).toBe(1);
     expect(result.diagnostics.activation.tokenCountCompleteness).toBe(false);
+    expect(result.safeToActivate).toBe(false);
+  });
+
+  it("fails closed when semantic duplicate candidates remain unresolved", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/a.jsonl", [
+        sessionMeta("a", 90),
+        tokenCount(100, { input_tokens: 100 }, { total: { input_tokens: 100, output_tokens: 0, total_tokens: 100 } }),
+        tokenCount(110, { input_tokens: 70 }, { total: { input_tokens: 180, output_tokens: 0, total_tokens: 180 } }),
+        tokenCount(110, { input_tokens: 60 }, { total: { input_tokens: 180, output_tokens: 0, total_tokens: 180 } }),
+      ]),
+    ]);
+
+    expect(result.diagnostics.tokenCount.duplicateEvidence.unresolvedPairs).toBe(1);
+    expect(result.diagnostics.activation.tokenCountDuplicateSemantics).toBe(false);
     expect(result.safeToActivate).toBe(false);
   });
 
