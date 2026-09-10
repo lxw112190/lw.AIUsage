@@ -181,6 +181,31 @@ describe("Codex v5 parser pipeline", () => {
     expect(result.records).toHaveLength(3);
   });
 
+  it("suppresses a transition-proven semantic duplicate before it can pollute later state", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/a.jsonl", [
+        sessionMeta("a", 90),
+        tokenCount(100, { input_tokens: 100, output_tokens: 0 }, { total: { input_tokens: 100, output_tokens: 0, total_tokens: 100 } }),
+        tokenCount(110, { input_tokens: 80, output_tokens: 0 }, { total: { input_tokens: 180, output_tokens: 0, total_tokens: 180 } }),
+        tokenCount(110, { input_tokens: 70, output_tokens: 0 }, { total: { input_tokens: 180, output_tokens: 0, total_tokens: 180 } }),
+        tokenCount(120, { input_tokens: 20, output_tokens: 0 }, { total: { input_tokens: 200, output_tokens: 0, total_tokens: 200 } }),
+      ]),
+    ]);
+
+    expect(result.diagnostics.tokenCount).toMatchObject({
+      observedEvents: 4,
+      canonicalEvents: 3,
+      semanticSnapshotDuplicateEvents: 1,
+      semanticDuplicateCandidates: 0,
+      suppressedDuplicateEvents: 1,
+      suppressedDuplicateTokens: 70,
+    });
+    expect(result.diagnostics.tokenCount.duplicateEvidence).toMatchObject({ resolvedStrongPairs: 1, unresolvedPairs: 0 });
+    expect(result.diagnostics.invariants.tokenCountDuplicateEvent).toBe(true);
+    expect(result.records).toHaveLength(3);
+    expect(result.records.reduce((sum, record) => sum + record.usage.inputTokens, 0)).toBe(200);
+  });
+
   it("keeps a conflicting payload as a second contribution with a distinct slot id", () => {
     const result = parseCodexFilesV5([
       input("/sessions/a.jsonl", [
@@ -248,6 +273,30 @@ describe("Codex v5 parser pipeline", () => {
     expect(child?.canonicalAfterForkReplay).toHaveLength(1);
     expect(child?.canonicalAfterForkReplay[0]?.usage.inputTokens).toBe(30);
     expect(result.diagnostics.forkReplay.replaySuppressedEvents).toBe(2);
+  });
+
+  it("keeps fork baselines and replay accounting stable around a child semantic duplicate", () => {
+    const result = parseCodexFilesV5([
+      input("/sessions/parent.jsonl", [
+        sessionMeta("parent", 100),
+        tokenCount(150, { input_tokens: 100, output_tokens: 0 }, { total: { input_tokens: 100, output_tokens: 0, total_tokens: 100 } }),
+      ]),
+      input("/sessions/child.jsonl", [
+        sessionMeta("child", 200, { parent: "parent" }),
+        tokenCount(210, { input_tokens: 20, output_tokens: 0 }, { total: { input_tokens: 120, output_tokens: 0, total_tokens: 120 } }),
+        tokenCount(220, { input_tokens: 60, output_tokens: 0 }, { total: { input_tokens: 180, output_tokens: 0, total_tokens: 180 } }),
+        tokenCount(220, { input_tokens: 50, output_tokens: 0 }, { total: { input_tokens: 180, output_tokens: 0, total_tokens: 180 } }),
+        tokenCount(230, { input_tokens: 20, output_tokens: 0 }, { total: { input_tokens: 200, output_tokens: 0, total_tokens: 200 } }),
+      ]),
+    ]);
+    const child = result.sessions.find((session) => session.sessionId === "child");
+
+    expect(result.diagnostics.tokenCount).toMatchObject({ semanticSnapshotDuplicateEvents: 1, duplicateConflicts: 0 });
+    expect(result.diagnostics.forkBaseline).toMatchObject({ forkSessions: 1, resolvedBaselineSessions: 1 });
+    expect(result.diagnostics.invariants).toMatchObject({ tokenCountDuplicateEvent: true, forkContribution: true, forkToken: true });
+    expect(child?.canonicalBeforeForkReplay.map((item) => item.aggregateTotal)).toEqual([20, 60, 20]);
+    expect(child?.finalTokenCount).toBe(100);
+    expect(result.safeToActivate).toBe(true);
   });
 
   it("blocks activation for a missing fork parent", () => {

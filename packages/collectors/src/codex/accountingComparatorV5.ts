@@ -9,7 +9,7 @@ import { resolveForkBaselinesV5, resolveForkReplayV5, type CanonicalUsageContrib
 import { reconcileCodexLogicalSessionsV5, type CodexLogicalSessionConflictSummaryV5, type CodexLogicalSessionReconcileResultV5 } from "./logicalSessionV5";
 import { deriveTokenCountContribution, type CodexAccountingEvent } from "./accountingV5";
 import { payloadUsageCandidateOf, resolvePayloadFallbackV5, type PayloadSuppression } from "./payloadFallbackV5";
-import type { CodexTokenCountDuplicateEvidenceSummary } from "./tokenCountDuplicateV5";
+import type { CodexTokenCountDuplicateEvidenceSummary, TokenCountSuppressionV5 } from "./tokenCountDuplicateV5";
 import type { ParserV4MirrorRecord } from "./rawAuditTypes";
 import type { CodexV5ParserDiagnostics } from "./parserV5";
 
@@ -28,6 +28,8 @@ export type CodexV4V5DeltaReason =
   | "payload-fallback"
   | "taxonomy-non-token-usage"
   | "v4-candidate-collision"
+  | "token-duplicate-representative"
+  | "v4-missing-model"
   | "mixed"
   | "v4-only"
   | "v5-only"
@@ -113,6 +115,7 @@ export interface CodexV4MappingDiagnostics {
   equivalentUsageCollisionRecords: number;
   equivalentUsageCollisionOccurrences: number;
   resolvedByUsageRecords: number;
+  resolvedBySemanticSuppressionRecords: number;
   unmappedRecords: number;
   ambiguousRecords: number;
   ambiguousUsageUniqueMatchRecords: number;
@@ -127,6 +130,7 @@ export type CodexV4MappingKind =
   | "unique"
   | "resolved-metadata"
   | "resolved-usage"
+  | "resolved-semantic-suppression"
   | "equivalent-collision"
   | "equivalent-usage-collision"
   | "unmapped"
@@ -152,6 +156,12 @@ export interface CodexV4CandidateEvidence extends CodexV4Candidate {
   v5AfterForkUsage: TokenUsage;
   v5AfterForkTotal: number;
   v4UsageMatchesAfterFork: boolean;
+  semanticSuppression?: {
+    representativeRawIdentity: string;
+    suppressedUsage: TokenUsage;
+    suppressedTokens: number;
+    v4UsageMatchesSuppressed: boolean;
+  };
   forkPosition: CodexV4CandidateForkPosition;
 }
 
@@ -164,6 +174,7 @@ export interface CodexV4MappingEvidence {
   sourceKind: CodexUsageSource;
   total: number;
   usageMatchCandidates: number;
+  suppressedUsageMatchCandidates: number;
   candidates: CodexV4CandidateEvidence[];
 }
 
@@ -256,6 +267,7 @@ export interface CodexV5DiagnosticsSummary {
     exactRawDuplicateEvents: number;
     rawIdentityDuplicateEvents: number;
     exactRawContentDuplicateEvents: number;
+    semanticSnapshotDuplicateEvents: number;
     semanticDuplicateCandidates: number;
     suppressedDuplicateEvents: number;
     suppressedDuplicateTokens: number;
@@ -278,7 +290,10 @@ export interface CodexV5DiagnosticsSummary {
     "missingParentCheckpointSessions" | "missingChildTotalTimestampSessions" |
     "incomparableBaselineSessions" | "cycleSessions" | "conflictingParentSessions">;
   forkReplay: Pick<CodexV5ParserDiagnostics["forkReplay"], "replayPrefixMismatchSessions" | "partialReplayBlockedEvents" | "missingReplayIdentityEvents">;
-  projection: Pick<CodexV5ParserDiagnostics["projection"], "missingTimestampContributions" | "missingTimestampTokens">;
+  projection: Pick<CodexV5ParserDiagnostics["projection"],
+    "missingTimestampContributions" | "missingTimestampTokens" |
+    "unknownModelRecords" | "unknownModelTokens" |
+    "unknownProjectRecords" | "unknownProjectTokens">;
   invariants: CodexV5ParserDiagnostics["invariants"];
   activation: CodexV5ParserDiagnostics["activation"];
 }
@@ -298,12 +313,16 @@ export interface CodexProductionSemanticValidation {
   payloadFallbackSemantics: boolean;
   forkSemantics: boolean;
   unresolvedSemanticCandidates: number;
+  unresolvedPrimarySideTokens: number;
+  unresolvedCandidateSideTokens: number;
+  unresolvedAccountingDelta: number;
+  /** @deprecated Use unresolvedCandidateSideTokens. */
   unresolvedSemanticTokens: number;
   validated: boolean;
 }
 
 export interface CodexV4V5ComparisonReport {
-  comparatorVersion: 4;
+  comparatorVersion: 5;
   snapshot: { files: number };
   universe: CodexComparisonUniverse;
   v4: {
@@ -337,6 +356,12 @@ export interface CodexV4V5ComparisonReport {
     unexplainedEvents: number;
     mixedEvents: number;
     mixedDelta: number;
+    v5OnlyMissingModelEvents: number;
+    v5OnlyMissingModelTokens: number;
+    v5OnlyAggregateLastEvents: number;
+    v5OnlyAggregateLastTokens: number;
+    v5OnlyMissingModelAggregateLastEvents: number;
+    v5OnlyMissingModelAggregateLastTokens: number;
     signalCounts: Record<CodexAttributionSignalReason, number>;
   };
   sessions: CodexSessionComparisonV5[];
@@ -359,7 +384,8 @@ export interface CodexV4V5ComparatorOptions {
 
 const reasons: CodexV4V5DeltaReason[] = [
   "same", "fork-baseline", "fork-replay", "token-reset", "token-aggregate",
-  "payload-suppression", "payload-fallback", "taxonomy-non-token-usage", "v4-candidate-collision", "mixed", "v4-only",
+  "payload-suppression", "payload-fallback", "taxonomy-non-token-usage", "v4-candidate-collision",
+  "token-duplicate-representative", "v4-missing-model", "mixed", "v4-only",
   "v5-only", "usage-changed", "unexplained",
 ];
 
@@ -510,6 +536,7 @@ const v5DiagnosticsSummaryOf = (diagnostics: CodexV5ParserDiagnostics): CodexV5D
     exactRawDuplicateEvents: diagnostics.tokenCount.exactRawDuplicateEvents,
     rawIdentityDuplicateEvents: diagnostics.tokenCount.rawIdentityDuplicateEvents,
     exactRawContentDuplicateEvents: diagnostics.tokenCount.exactRawContentDuplicateEvents,
+    semanticSnapshotDuplicateEvents: diagnostics.tokenCount.semanticSnapshotDuplicateEvents,
     semanticDuplicateCandidates: diagnostics.tokenCount.semanticDuplicateCandidates,
     suppressedDuplicateEvents: diagnostics.tokenCount.suppressedDuplicateEvents,
     suppressedDuplicateTokens: diagnostics.tokenCount.suppressedDuplicateTokens,
@@ -548,6 +575,10 @@ const v5DiagnosticsSummaryOf = (diagnostics: CodexV5ParserDiagnostics): CodexV5D
   projection: {
     missingTimestampContributions: diagnostics.projection.missingTimestampContributions,
     missingTimestampTokens: diagnostics.projection.missingTimestampTokens,
+    unknownModelRecords: diagnostics.projection.unknownModelRecords,
+    unknownModelTokens: diagnostics.projection.unknownModelTokens,
+    unknownProjectRecords: diagnostics.projection.unknownProjectRecords,
+    unknownProjectTokens: diagnostics.projection.unknownProjectTokens,
   },
   invariants: { ...diagnostics.invariants },
   activation: { ...diagnostics.activation },
@@ -679,6 +710,7 @@ const buildV4Mapping = (
   entries: Map<string, EntryAccumulator>,
   evidenceLimit: number,
   candidateCollisions: Map<string, { recordId: string; mappingKind: CodexV4MappingKind; representativeRawIdentity: string }>,
+  tokenCountSuppressions: ReadonlyMap<string, TokenCountSuppressionV5>,
 ): CodexV4MappingDiagnostics => {
   const candidates = new Map<string, CodexV4Candidate[]>();
   const eventByKey = recordMetadataOf(files);
@@ -713,6 +745,7 @@ const buildV4Mapping = (
   let equivalentUsageCollisionRecords = 0;
   let equivalentUsageCollisionOccurrences = 0;
   let resolvedByUsageRecords = 0;
+  let resolvedBySemanticSuppressionRecords = 0;
   let unmappedRecords = 0;
   let ambiguousRecords = 0;
   let ambiguousUsageUniqueMatchRecords = 0;
@@ -747,6 +780,7 @@ const buildV4Mapping = (
     const candidates = selected.map((candidate): CodexV4CandidateEvidence => {
       const entry = entries.get(candidate.identityKey);
       const afterForkUsage = entry ? usageOf(entry.afterFork) : zeroUsage();
+      const suppression = tokenCountSuppressions.get(candidate.identityKey);
       const hasBeforeFork = !!entry && entry.beforeFork.length > 0;
       const hasAfterFork = !!entry && entry.afterFork.length > 0;
       return {
@@ -754,6 +788,12 @@ const buildV4Mapping = (
         v5AfterForkUsage: afterForkUsage,
         v5AfterForkTotal: totalTokens(afterForkUsage),
         v4UsageMatchesAfterFork: usageEqual(record.usage, afterForkUsage),
+        semanticSuppression: suppression ? {
+          representativeRawIdentity: suppression.representativeRawIdentity,
+          suppressedUsage: suppression.suppressedUsage,
+          suppressedTokens: suppression.suppressedTokens,
+          v4UsageMatchesSuppressed: usageEqual(record.usage, suppression.suppressedUsage),
+        } : undefined,
         forkPosition: hasBeforeFork && hasAfterFork ? "both" : hasBeforeFork ? "before-fork" : hasAfterFork ? "after-fork" : "none",
       };
     });
@@ -766,6 +806,7 @@ const buildV4Mapping = (
       sourceKind: record.sourceKind,
       total: totalTokens(record.usage),
       usageMatchCandidates: candidates.filter((candidate) => candidate.v4UsageMatchesAfterFork).length,
+      suppressedUsageMatchCandidates: candidates.filter((candidate) => candidate.semanticSuppression?.v4UsageMatchesSuppressed).length,
       candidates,
     };
   };
@@ -862,6 +903,17 @@ const buildV4Mapping = (
       resolvedByUsageRecords += 1;
       continue;
     }
+    const matchingSuppressedCandidates = remaining.filter((candidate) => {
+      const suppression = tokenCountSuppressions.get(candidate.identityKey);
+      return !!suppression && usageEqual(record.usage, suppression.suppressedUsage);
+    });
+    if (matchingSuppressedCandidates.length === 1) {
+      attachRecord(matchingSuppressedCandidates[0]!, record, "resolved-semantic-suppression", remaining.length);
+      recordUnselectedCandidates(record, "resolved-semantic-suppression", matchingSuppressedCandidates[0]!, remaining);
+      mappedRecords += 1;
+      resolvedBySemanticSuppressionRecords += 1;
+      continue;
+    }
     {
       ambiguousRecords += 1;
       const key = `v4-ambiguous\n${recordId}`;
@@ -896,6 +948,7 @@ const buildV4Mapping = (
     equivalentUsageCollisionRecords,
     equivalentUsageCollisionOccurrences,
     resolvedByUsageRecords,
+    resolvedBySemanticSuppressionRecords,
     unmappedRecords,
     ambiguousRecords,
     ambiguousUsageUniqueMatchRecords,
@@ -913,6 +966,7 @@ interface CodexComparatorEvidenceContext {
   baselines: Map<string, ForkBaselineResolutionV5>;
   forkReplaySuppressions: Map<string, ForkReplaySuppressionV5[]>;
   payloadSuppressions: Map<string, PayloadSuppression[]>;
+  tokenCountSuppressions: Map<string, TokenCountSuppressionV5>;
   candidateCollisions: Map<string, { recordId: string; mappingKind: CodexV4MappingKind; representativeRawIdentity: string }>;
 }
 
@@ -962,7 +1016,25 @@ const buildComparatorEvidenceContext = (
       payloadSuppressions.set(key, list);
     }
   }
-  return { decoded, reconciled, baselines: baselinePlan.resolutions, forkReplaySuppressions, payloadSuppressions, candidateCollisions: new Map() };
+  const tokenCountSuppressions = new Map<string, TokenCountSuppressionV5>();
+  for (const session of v5.sessions) for (const suppression of session.tokenCountSuppressions)
+    tokenCountSuppressions.set(comparisonEventKey(session.sessionId, suppression.suppressedRawIdentity), suppression);
+  return {
+    decoded,
+    reconciled,
+    baselines: baselinePlan.resolutions,
+    forkReplaySuppressions,
+    payloadSuppressions,
+    tokenCountSuppressions,
+    candidateCollisions: new Map(),
+  };
+};
+
+const aggregateOnlyLastEvent = (event: CodexAccountingEvent): boolean => {
+  const last = event.tokenCount?.last;
+  return !!last && last.fieldPresence.total && last.total > 0 &&
+    last.input === 0 && last.cachedInput === 0 && last.cacheCreationInput === 0 &&
+    last.output === 0 && last.reasoningOutput === 0;
 };
 
 const collectAttributionSignals = (
@@ -971,12 +1043,25 @@ const collectAttributionSignals = (
 ): CodexAttributionSignal[] => {
   const signals: CodexAttributionSignal[] = [];
   const candidateCollision = context.candidateCollisions.get(entry.key);
+  const semanticRepresentativeSuppression = candidateCollision?.mappingKind === "resolved-semantic-suppression"
+    ? context.tokenCountSuppressions.get(comparisonEventKey(entry.sessionId, candidateCollision.representativeRawIdentity))
+    : undefined;
   if (candidateCollision && entry.v4Records.length === 0 && entry.afterFork.length > 0) {
     signals.push({
-      reason: "v4-candidate-collision",
+      reason: semanticRepresentativeSuppression ? "token-duplicate-representative" : "v4-candidate-collision",
       evidence: candidateCollision.mappingKind,
-      relatedRawIdentity: candidateCollision.representativeRawIdentity,
+      relatedRawIdentity: semanticRepresentativeSuppression?.representativeRawIdentity ?? candidateCollision.representativeRawIdentity,
       tokens: totalTokens(usageOf(entry.afterFork)),
+    });
+  }
+  const semanticSuppression = context.tokenCountSuppressions.get(entry.key);
+  if (semanticSuppression && entry.v4Records.length > 0 && entry.afterFork.length === 0) {
+    signals.push({
+      reason: "token-duplicate-representative",
+      evidence: semanticSuppression.kind,
+      relatedRawIdentity: semanticSuppression.representativeRawIdentity,
+      relatedSessionId: semanticSuppression.sessionId,
+      tokens: -semanticSuppression.suppressedTokens,
     });
   }
   for (const suppression of context.forkReplaySuppressions.get(entry.key) ?? []) {
@@ -1020,8 +1105,10 @@ const collectAttributionSignals = (
   if (entry.source === "nested-info-non-token-count" && entry.v4Records.length > 0 && entry.afterFork.length === 0)
     signals.push({ reason: "taxonomy-non-token-usage", evidence: "v4-nested-info-on-non-token-count" });
   const hasKeptTokenCount = entry.afterFork.some((contribution) => contribution.sourceKind === "token-count");
-  if (hasKeptTokenCount && entry.tokenRef?.method === "total-reset") signals.push({ reason: "token-reset", evidence: "token-count-method-total-reset" });
-  if (hasKeptTokenCount && entry.tokenRef?.method === "total-aggregate-delta") signals.push({ reason: "token-aggregate", evidence: "token-count-method-total-aggregate-delta" });
+  if (!candidateCollision && entry.v4Records.length === 0 && entry.afterFork.some((contribution) => !contribution.event.model && aggregateOnlyLastEvent(contribution.event)))
+    signals.push({ reason: "v4-missing-model", evidence: "v4-required-model-before-aggregate-last" });
+  if (!semanticRepresentativeSuppression && hasKeptTokenCount && entry.tokenRef?.method === "total-reset") signals.push({ reason: "token-reset", evidence: "token-count-method-total-reset" });
+  if (!semanticRepresentativeSuppression && hasKeptTokenCount && entry.tokenRef?.method === "total-aggregate-delta") signals.push({ reason: "token-aggregate", evidence: "token-count-method-total-aggregate-delta" });
   return signals;
 };
 
@@ -1158,7 +1245,14 @@ export function compareCodexV4V5(
       entry.payloadFallbacks.push(fallback);
     }
   }
-  const mapping = buildV4Mapping(files, v4, entries, limit, evidence.candidateCollisions);
+  const mapping = buildV4Mapping(
+    files,
+    v4,
+    entries,
+    limit,
+    evidence.candidateCollisions,
+    evidence.tokenCountSuppressions,
+  );
   for (const entry of entries.values()) if (!entry.source) entry.source = sourceByKey.get(entry.key)?.source;
   const comparisonEntries: CodexEventComparisonV5[] = [...entries.values()].map((entry) => {
     const v4Usage = zeroUsage();
@@ -1203,9 +1297,18 @@ export function compareCodexV4V5(
   const unexplainedDelta = comparisonEntries.filter((entry) => !entry.explained).reduce((sum, entry) => sum + entry.delta, 0);
   const changedEntries = comparisonEntries.filter((entry) => entry.delta !== 0 || signedNonZero(entry.componentDelta));
   const unexplainedEntries = changedEntries.filter((entry) => !entry.explained);
+  const v5OnlyEntries = changedEntries.filter((entry) => !entry.v4 && entry.v5.afterFork.length > 0);
+  const hasMissingModel = (entry: CodexEventComparisonV5): boolean =>
+    entry.v5.afterFork.some((contribution) => !contribution.event.model);
+  const hasAggregateOnlyLast = (entry: CodexEventComparisonV5): boolean =>
+    entry.v5.afterFork.some((contribution) => aggregateOnlyLastEvent(contribution.event));
+  const v5OnlyMissingModel = v5OnlyEntries.filter(hasMissingModel);
+  const v5OnlyAggregateLast = v5OnlyEntries.filter(hasAggregateOnlyLast);
+  const v5OnlyMissingModelAggregateLast = v5OnlyEntries.filter((entry) => hasMissingModel(entry) && hasAggregateOnlyLast(entry));
   const signalCounts = Object.fromEntries(([
     "fork-baseline", "fork-replay", "token-reset", "token-aggregate",
     "payload-suppression", "payload-fallback", "taxonomy-non-token-usage", "v4-candidate-collision",
+    "token-duplicate-representative", "v4-missing-model",
   ] as CodexAttributionSignalReason[]).map((reason) => [
     reason,
     comparisonEntries.reduce((sum, entry) => sum + entry.signals.filter((signal) => signal.reason === reason).length, 0),
@@ -1252,7 +1355,11 @@ export function compareCodexV4V5(
   const comparisonComplete = Object.values(gates).every(Boolean);
   const v5Diagnostics = v5DiagnosticsSummaryOf(v5.diagnostics);
   const duplicateEvidence = v5Diagnostics.tokenCount.duplicateEvidence;
-  const unresolvedSemanticCandidates = duplicateEvidence.candidatePairs - duplicateEvidence.confirmedPairs;
+  const unresolvedSemanticCandidates = duplicateEvidence.unresolvedPairs;
+  const candidateCollisionAccountingDelta = comparisonEntries
+    .filter((entry) => entry.reason === "v4-candidate-collision" || entry.signals.some((signal) => signal.reason === "v4-candidate-collision"))
+    .reduce((sum, entry) => sum + entry.delta, 0);
+  const unresolvedAccountingDelta = unresolvedSemanticCandidates === 0 ? 0 : candidateCollisionAccountingDelta;
   const tokenCountDuplicateSemantics = unresolvedSemanticCandidates === 0 && v5Diagnostics.tokenCount.duplicateConflicts === 0;
   const productionSemantics: CodexProductionSemanticValidation = {
     tokenCountDuplicateSemantics,
@@ -1263,6 +1370,9 @@ export function compareCodexV4V5(
       v5Diagnostics.invariants.forkContribution &&
       v5Diagnostics.invariants.forkToken,
     unresolvedSemanticCandidates,
+    unresolvedPrimarySideTokens: duplicateEvidence.unresolvedPrimaryTokens,
+    unresolvedCandidateSideTokens: duplicateEvidence.unresolvedCandidateTokens,
+    unresolvedAccountingDelta,
     unresolvedSemanticTokens: duplicateEvidence.unresolvedCandidateTokens,
     validated: tokenCountDuplicateSemantics &&
       v5.diagnostics.activation.tokenCountCompleteness &&
@@ -1279,7 +1389,7 @@ export function compareCodexV4V5(
   const examplesByReason = emptyExamples();
   for (const reason of reasons) examplesByReason[reason] = comparisonEntries.filter((entry) => entry.reason === reason).slice().sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta) || left.key.localeCompare(right.key)).slice(0, limit);
   return {
-    comparatorVersion: 4,
+    comparatorVersion: 5,
     snapshot: { files: files.length },
     universe,
     v4: { recordCount: v4.recordCount, sessionCount: v4.sessionCount, usage: v4.usage, totalTokens: totalTokens(v4.usage) },
@@ -1304,6 +1414,12 @@ export function compareCodexV4V5(
       unexplainedEvents: unexplainedEntries.length,
       mixedEvents: mixedEntries.length,
       mixedDelta: mixedEntries.reduce((sum, entry) => sum + entry.delta, 0),
+      v5OnlyMissingModelEvents: v5OnlyMissingModel.length,
+      v5OnlyMissingModelTokens: v5OnlyMissingModel.reduce((sum, entry) => sum + entry.v5.totalAfterFork, 0),
+      v5OnlyAggregateLastEvents: v5OnlyAggregateLast.length,
+      v5OnlyAggregateLastTokens: v5OnlyAggregateLast.reduce((sum, entry) => sum + entry.v5.totalAfterFork, 0),
+      v5OnlyMissingModelAggregateLastEvents: v5OnlyMissingModelAggregateLast.length,
+      v5OnlyMissingModelAggregateLastTokens: v5OnlyMissingModelAggregateLast.reduce((sum, entry) => sum + entry.v5.totalAfterFork, 0),
       signalCounts,
     },
     sessions,

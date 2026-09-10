@@ -53,6 +53,7 @@ export interface SessionRecord {
 export interface ProjectRecord {
   key: string;
   name: string;
+  hidden?: boolean;
   path?: string;
   repositoryUrl?: string;
   lastActiveAt: number;

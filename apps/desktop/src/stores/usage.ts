@@ -7,7 +7,7 @@ import {
 } from "@lw-aiusage/platform";
 import type { WatchHandle } from "@lw-aiusage/platform";
 import { DexieUsageRepository } from "@lw-aiusage/storage";
-import { defaultCollectors } from "@lw-aiusage/collectors";
+import { defaultCollectors, type CollectorProgress } from "@lw-aiusage/collectors";
 import {
   detectCollectors,
   type CollectorDetectionResult,
@@ -36,6 +36,8 @@ export const useUsageStore = defineStore("runtime", () => {
   const collectorStatuses = ref<CollectorDetectionResult[]>([]);
   const syncing = ref(false);
   const lastSync = ref<number>();
+  const lastSyncResult = ref<SyncResult>();
+  const syncProgress = ref<Pick<CollectorProgress, "source" | "current" | "total">>();
   const error = ref<string>();
   const dataRevision = ref(0);
   const rebuildAudit = ref<RebuildAuditResult>();
@@ -45,6 +47,16 @@ export const useUsageStore = defineStore("runtime", () => {
   const rawAuditProgress = ref<{ current: number; total: number }>();
   const rawAuditBusy = ref(false);
   let watchHandle: WatchHandle | undefined;
+  const collectorVersions = Object.fromEntries(
+    collectors.map((collector) => [collector.source, collector.parserVersion]),
+  ) as Record<string, number>;
+  const trackSyncProgress = (progress: CollectorProgress): void => {
+    syncProgress.value = {
+      source: progress.source,
+      current: progress.current,
+      total: progress.total,
+    };
+  };
 
   async function refreshCollectorStatuses(): Promise<void> {
     collectorStatuses.value = await detectCollectors(platform, collectors);
@@ -52,10 +64,9 @@ export const useUsageStore = defineStore("runtime", () => {
   async function handleWatchSync(watchResult: SyncResult): Promise<void> {
     for (const message of watchResult.diagnostics)
       diagnostics.add("WARN", message, "collector");
-    if (watchResult.inserted > 0) {
-      dataRevision.value += 1;
-      lastSync.value = Date.now();
-    }
+    lastSyncResult.value = watchResult;
+    lastSync.value = Date.now();
+    if (watchResult.inserted > 0) dataRevision.value += 1;
   }
   async function startWatch(): Promise<void> {
     if (!watchHandle)
@@ -75,7 +86,8 @@ export const useUsageStore = defineStore("runtime", () => {
         watchHandle = undefined;
       }
       await repository.resetStatistics();
-      const result = await manager.sync();
+      const result = await manager.sync(trackSyncProgress);
+      lastSyncResult.value = result;
       const after = await audit.audit();
       rebuildAudit.value = {
         before,
@@ -102,6 +114,7 @@ export const useUsageStore = defineStore("runtime", () => {
         catch (cause) { diagnostics.add("ERROR", cause instanceof Error ? cause.message : "Unable to restart watcher", "watch"); }
       }
       syncing.value = false;
+      syncProgress.value = undefined;
     }
   }
   async function resetLocalData(): Promise<void> {
@@ -120,6 +133,8 @@ export const useUsageStore = defineStore("runtime", () => {
       auditReport.value = undefined;
       rawAuditReport.value = undefined;
       codexAccountingAuditReport.value = undefined;
+      lastSyncResult.value = undefined;
+      lastSync.value = undefined;
       dataRevision.value += 1;
       diagnostics.add("INFO", "Local usage data reset complete");
     } catch (cause) {
@@ -141,7 +156,8 @@ export const useUsageStore = defineStore("runtime", () => {
     diagnostics.add("INFO", "Usage sync started");
     try {
       await refreshCollectorStatuses();
-      const result = await manager.sync();
+      const result = await manager.sync(trackSyncProgress);
+      lastSyncResult.value = result;
       for (const message of result.diagnostics)
         diagnostics.add("WARN", message, "collector");
       dataRevision.value += 1;
@@ -157,6 +173,7 @@ export const useUsageStore = defineStore("runtime", () => {
       diagnostics.add("ERROR", error.value, "sync");
     } finally {
       syncing.value = false;
+      syncProgress.value = undefined;
     }
   }
   function exportDiagnostics(): void {
@@ -191,6 +208,8 @@ export const useUsageStore = defineStore("runtime", () => {
       }
       const report = await new CodexAccountingAuditService(platform, repository, async () => {
         const syncResult = await manager.sync();
+        lastSyncResult.value = syncResult;
+        lastSync.value = Date.now();
         if (syncResult.inserted > 0) {
           dataRevision.value += 1;
           lastSync.value = Date.now();
@@ -223,6 +242,9 @@ export const useUsageStore = defineStore("runtime", () => {
     collectorStatuses,
     syncing,
     lastSync,
+    lastSyncResult,
+    syncProgress,
+    collectorVersions,
     error,
     dataRevision,
     rebuildAudit,

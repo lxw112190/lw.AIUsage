@@ -1,6 +1,9 @@
 import {
+  addLocalDays,
   estimatedCostUsd,
   pricingForModel,
+  startOfLocalDay,
+  startOfLocalWeek,
   totalTokens,
   type AgentSource,
   type UsageBucket,
@@ -40,6 +43,15 @@ export interface DashboardData {
   bySource: Record<string, number>;
   bySourceRecords: Record<string, number>;
   trend: DashboardTrendPoint[];
+  periods: PeriodComparison[];
+}
+export type ComparisonPeriod = "today" | "week" | "month";
+export interface PeriodComparison {
+  period: ComparisonPeriod;
+  currentTokens: number;
+  previousTokens: number;
+  deltaTokens: number;
+  changePercent?: number;
 }
 export interface DashboardTrendPoint {
   day: string;
@@ -107,6 +119,44 @@ const bucketGroup = (
   );
 };
 
+const startOfLocalMonth = (timestamp: number): number => {
+  const date = new Date(timestamp);
+  return new Date(date.getFullYear(), date.getMonth(), 1).getTime();
+};
+
+const previousLocalMonth = (timestamp: number): number => {
+  const date = new Date(timestamp);
+  return new Date(date.getFullYear(), date.getMonth() - 1, 1).getTime();
+};
+
+const tokensBetween = (buckets: readonly UsageBucket[], from: number, to: number): number =>
+  buckets.reduce((sum, bucket) => sum + (bucket.bucketStart >= from && bucket.bucketStart < to ? totalTokens(bucket.usage) : 0), 0);
+
+export function periodComparisons(buckets: readonly UsageBucket[], now = Date.now()): PeriodComparison[] {
+  const day = startOfLocalDay(now);
+  const week = startOfLocalWeek(now);
+  const month = startOfLocalMonth(now);
+  const periods: Array<{ period: ComparisonPeriod; currentStart: number; previousStart: number }> = [
+    { period: "today", currentStart: day, previousStart: addLocalDays(day, -1) },
+    { period: "week", currentStart: week, previousStart: addLocalDays(week, -7) },
+    { period: "month", currentStart: month, previousStart: previousLocalMonth(month) },
+  ];
+  return periods.map(({ period, currentStart, previousStart }) => {
+    const elapsed = Math.max(1, now - currentStart + 1);
+    const previousEnd = Math.min(currentStart, previousStart + elapsed);
+    const currentTokens = tokensBetween(buckets, currentStart, now + 1);
+    const previousTokens = tokensBetween(buckets, previousStart, previousEnd);
+    const deltaTokens = currentTokens - previousTokens;
+    return {
+      period,
+      currentTokens,
+      previousTokens,
+      deltaTokens,
+      ...(previousTokens > 0 ? { changePercent: (deltaTokens / previousTokens) * 100 } : {}),
+    };
+  });
+}
+
 export class QueryService {
   constructor(private readonly repository: UsageRepository) {}
   async records(filters: UsageFilters = {}): Promise<UsageRecord[]> {
@@ -121,7 +171,7 @@ export class QueryService {
   async projectOptions(): Promise<string[]> {
     return this.repository.getProjectOptions();
   }
-  async dashboard(): Promise<DashboardData> {
+  async dashboard(now = Date.now()): Promise<DashboardData> {
     const buckets = await this.repository.getBuckets();
     const bySource: Record<string, number> = {};
     const bySourceRecords: Record<string, number> = {};
@@ -144,6 +194,7 @@ export class QueryService {
       bySource,
       bySourceRecords,
       trend: dailyUsageFromBuckets(buckets).map(({ day, timestamp, totalTokens }) => ({ day, timestamp, totalTokens })),
+      periods: periodComparisons(buckets, now),
     };
   }
   async stats(): Promise<StatsData> {

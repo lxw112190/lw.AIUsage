@@ -1,9 +1,10 @@
-import { shallowRef, ref, watch } from "vue";
+import { computed, shallowRef, ref, watch } from "vue";
 import { defineStore } from "pinia";
-import { projectDisplayName, type AgentSource, type UsageRecord } from "@lw-aiusage/core";
+import type { AgentSource, UsageRecord } from "@lw-aiusage/core";
 import { DexieUsageRepository, type UsagePageResult } from "@lw-aiusage/storage";
 import { QueryService } from "@lw-aiusage/application";
 import { useUsageStore } from "./usage";
+import { useProjectPreferencesStore } from "./projects";
 
 const pageSizeOptions = [20, 50, 100] as const;
 const toTimestamp = (value: string, end = false): number | undefined => {
@@ -17,6 +18,7 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
   const repository = new DexieUsageRepository();
   const query = new QueryService(repository);
   const runtime = useUsageStore();
+  const projects = useProjectPreferencesStore();
   const items = shallowRef<UsageRecord[]>([]);
   const page = ref(1);
   const pageSize = ref<number>(50);
@@ -30,8 +32,19 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
   const fromDate = ref("");
   const toDate = ref("");
   const modelOptions = ref<string[]>([]);
-  const projectOptions = ref<Array<{ key: string; name: string }>>([]);
+  const projectKeys = ref<string[]>([]);
+  const projectOptions = computed(() => projectKeys.value
+    .filter((key) => !projects.isHidden(key))
+    .map((key) => ({ key, name: projects.nameFor(key) })));
   let querySequence = 0;
+
+  const filters = () => ({
+    source: sourceFilter.value || undefined,
+    model: modelFilter.value || undefined,
+    projectKey: projectFilter.value || undefined,
+    from: toTimestamp(fromDate.value),
+    to: toTimestamp(toDate.value, true),
+  });
 
   async function loadPage(): Promise<void> {
     const sequence = ++querySequence;
@@ -42,11 +55,7 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
         page: page.value,
         pageSize: pageSize.value,
         order: "desc",
-        source: sourceFilter.value || undefined,
-        model: modelFilter.value || undefined,
-        projectKey: projectFilter.value || undefined,
-        from: toTimestamp(fromDate.value),
-        to: toTimestamp(toDate.value, true),
+        ...filters(),
       });
       if (sequence !== querySequence) return;
       items.value = result.items;
@@ -61,12 +70,18 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
     }
   }
   async function loadOptions(): Promise<void> {
-    const [models, projects] = await Promise.all([
+    const [models, keys] = await Promise.all([
       query.modelOptions(),
       query.projectOptions(),
+      projects.load(),
     ]);
     modelOptions.value = models;
-    projectOptions.value = projects.map((key) => ({ key, name: projectDisplayName(key) }));
+    projectKeys.value = keys;
+    if (projectFilter.value && projects.isHidden(projectFilter.value))
+      projectFilter.value = "";
+  }
+  async function filteredRecords(): Promise<UsageRecord[]> {
+    return query.records(filters());
   }
   function clearFilters(): void {
     sourceFilter.value = "";
@@ -98,6 +113,6 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
   return {
     items, page, pageSize, pageSizeOptions, total, totalPages, loading, error,
     sourceFilter, modelFilter, projectFilter, fromDate, toDate,
-    modelOptions, projectOptions, loadPage, loadOptions, clearFilters, setPage, setPageSize,
+    modelOptions, projectOptions, loadPage, loadOptions, filteredRecords, clearFilters, setPage, setPageSize,
   };
 });

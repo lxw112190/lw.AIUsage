@@ -163,6 +163,24 @@ h3 {
   font-size: 17px;
   margin-left: 6px;
 }
+.secondary-action,
+.text-action {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--purple);
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.text-action {
+  border: 0;
+  padding: 6px 0;
+  background: transparent;
+  white-space: nowrap;
+}
 .page {
   display: grid;
   gap: 22px;
@@ -172,6 +190,68 @@ h3 {
   grid-template-columns: repeat(4, 1fr);
   gap: 16px;
 }
+.health-panel {
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.health-main,
+.health-meta,
+.sync-progress-label {
+  display: flex;
+  align-items: center;
+}
+.health-main {
+  gap: 11px;
+}
+.health-main p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.health-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #8c94a4;
+  box-shadow: 0 0 0 5px #8c94a418;
+}
+.health-healthy .health-indicator { background: #2ead72; box-shadow: 0 0 0 5px #2ead7218; }
+.health-syncing .health-indicator { background: var(--purple); box-shadow: 0 0 0 5px #6957e818; }
+.health-warning .health-indicator { background: #db9b2d; box-shadow: 0 0 0 5px #db9b2d18; }
+.health-error .health-indicator { background: #d95454; box-shadow: 0 0 0 5px #d9545418; }
+.health-meta {
+  gap: 20px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.health-meta strong { color: var(--ink); margin-left: 3px; }
+.sync-progress { width: min(360px, 45%); }
+.sync-progress-label { justify-content: space-between; color: var(--muted); font-size: 11px; }
+.progress-track { height: 6px; margin-top: 7px; overflow: hidden; border-radius: 99px; background: #eceef3; }
+.progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--purple); transition: width .18s ease; }
+.period-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.period-card {
+  padding: 17px 19px;
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+.period-card > span,
+.period-card small { color: var(--muted); font-size: 11px; }
+.period-card > strong { font-size: 20px; }
+.period-card > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.period-card em { color: var(--muted); font-size: 11px; font-style: normal; font-weight: 750; }
+.period-card em.positive { color: #259b66; }
+.period-card em.negative { color: #c95a5a; }
 .stat-card,
 .panel {
   background: var(--card);
@@ -474,6 +554,24 @@ td {
   max-width: 800px;
   padding: 0;
 }
+.advanced-settings {
+  border-bottom: 1px solid var(--line);
+}
+.advanced-settings > summary {
+  display: grid;
+  gap: 5px;
+  padding: 20px 24px;
+  cursor: pointer;
+  color: var(--ink);
+  list-style-position: inside;
+}
+.advanced-settings > summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: 18px;
+}
+.advanced-settings[open] > summary { border-bottom: 1px solid var(--line); }
 .setting-row {
   display: flex;
   justify-content: space-between;

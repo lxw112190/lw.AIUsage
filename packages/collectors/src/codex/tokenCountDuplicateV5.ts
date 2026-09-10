@@ -63,7 +63,11 @@ export interface CodexTokenCountDuplicateEvidenceSummary {
   confirmedCandidateTokens: number;
   strongCandidateTokens: number;
   probableCandidateTokens: number;
+  unresolvedPrimaryTokens: number;
   unresolvedCandidateTokens: number;
+  resolvedStrongPairs: number;
+  unresolvedPairs: number;
+  resolvedStrongSuppressedTokens: number;
   transition: {
     primaryOnly: number;
     candidateOnly: number;
@@ -92,6 +96,7 @@ export interface TokenCountSuppressionV5 {
 
 export interface TokenCountDuplicateDiagnosticsV5 {
   exactRawContentDuplicateEvents: number;
+  semanticSnapshotDuplicateEvents: number;
   semanticDuplicateCandidates: number;
   suppressedDuplicateEvents: number;
   suppressedDuplicateTokens: number;
@@ -129,7 +134,11 @@ const emptySummary = (): CodexTokenCountDuplicateEvidenceSummary => ({
   confirmedCandidateTokens: 0,
   strongCandidateTokens: 0,
   probableCandidateTokens: 0,
+  unresolvedPrimaryTokens: 0,
   unresolvedCandidateTokens: 0,
+  resolvedStrongPairs: 0,
+  unresolvedPairs: 0,
+  resolvedStrongSuppressedTokens: 0,
   transition: { primaryOnly: 0, candidateOnly: 0, both: 0, neither: 0, reset: 0, incomparable: 0, insufficient: 0 },
   confirmedSuppressionTokens: 0,
   strongSuppressionCandidateTokens: 0,
@@ -413,7 +422,9 @@ export function summarizeTokenCountDuplicateEvidence(
   result.confirmedCandidateTokens = evidence.filter((item) => item.confidence === "confirmed").reduce((sum, item) => sum + item.candidateTokens, 0);
   result.strongCandidateTokens = evidence.filter((item) => item.confidence === "strong").reduce((sum, item) => sum + item.candidateTokens, 0);
   result.probableCandidateTokens = evidence.filter((item) => item.confidence === "probable").reduce((sum, item) => sum + item.candidateTokens, 0);
+  result.unresolvedPrimaryTokens = evidence.filter((item) => item.confidence !== "confirmed").reduce((sum, item) => sum + item.primaryTokens, 0);
   result.unresolvedCandidateTokens = evidence.filter((item) => item.confidence !== "confirmed").reduce((sum, item) => sum + item.candidateTokens, 0);
+  result.unresolvedPairs = evidence.filter((item) => item.confidence !== "confirmed").length;
   for (const item of evidence) {
     if (item.transitionClassification === "primary-only") result.transition.primaryOnly += 1;
     else if (item.transitionClassification === "candidate-only") result.transition.candidateOnly += 1;
@@ -428,7 +439,9 @@ export function summarizeTokenCountDuplicateEvidence(
       result.probablePrimaryTokens += item.primaryTokens;
       result.probableCandidateTokens += item.candidateTokens;
     }
-    if (item.confidence === "strong" && item.transitionClassification === "candidate-only")
+    if (item.confidence === "strong" && item.transitionClassification === "primary-only")
+      result.representativeChoiceDelta += item.primaryTokens - item.candidateTokens;
+    else if (item.confidence === "strong" && item.transitionClassification === "candidate-only")
       result.representativeChoiceDelta += item.candidateTokens - item.primaryTokens;
   }
   result.examples = evidence.slice(0, Math.max(0, detailLimit));
@@ -470,13 +483,36 @@ export function analyzeTokenCountDuplicatesV5(
   return summarizeTokenCountDuplicateEvidence(evidence, options.detailLimit ?? 20);
 }
 
-/** Suppresses only confirmed complete-Raw duplicates, before accounting state advances. */
+const evidenceEventKey = (sessionId: string, rawIdentity: string, eventIndex: number): string =>
+  `${sessionId}\n${eventIndex}\n${rawIdentity}`;
+
+const eventEvidenceKey = (event: CodexAccountingEvent): string =>
+  evidenceEventKey(sessionOf(event), event.rawIdentity, event.eventIndex);
+
+const evidenceKey = (evidence: TokenCountDuplicateEvidenceV5): string =>
+  [
+    evidenceEventKey(evidence.sessionId, evidence.primaryRawIdentity, evidence.primaryEventIndex),
+    evidenceEventKey(evidence.sessionId, evidence.candidateRawIdentity, evidence.candidateEventIndex),
+  ].sort().join("\n---\n");
+
+const semanticStrongSuppressible = (evidence: TokenCountDuplicateEvidenceV5): boolean =>
+  evidence.confidence === "strong" &&
+  evidence.sameTimestamp &&
+  evidence.sameCumulativeSnapshot &&
+  evidence.responseIdCompatible &&
+  evidence.turnIdCompatible &&
+  evidence.modelCompatible &&
+  (evidence.transitionClassification === "primary-only" ||
+    evidence.transitionClassification === "candidate-only" ||
+    (evidence.transitionClassification === "both" && usageEqual(evidence.primaryUsage, evidence.candidateUsage)));
+
+/** Suppresses confirmed Raw duplicates and transition-proven semantic duplicates before accounting state advances. */
 export function resolveTokenCountDuplicatesV5(
   events: readonly CodexAccountingEvent[],
   options: TokenCountDuplicateEvidenceOptions = {},
 ): TokenCountDuplicateResolutionV5 {
   const ordered = [...events].filter((event) => !!event.tokenCount).sort(eventOrder);
-  const analysis = analyzeTokenCountDuplicatesV5(ordered, options);
+  const fullEvidence = analyzeTokenCountDuplicatesV5(ordered, { detailLimit: Number.MAX_SAFE_INTEGER }).examples;
   const groups = new Map<string, CodexAccountingEvent[]>();
   for (const event of ordered) {
     const fingerprint = rawFingerprintOf(event);
@@ -488,7 +524,7 @@ export function resolveTokenCountDuplicatesV5(
   }
   const suppressed: TokenCountSuppressionV5[] = [];
   const suppressedIds = new Set<string>();
-  let duplicateConflicts = 0;
+  let duplicateConflicts = fullEvidence.filter((item) => item.confidence === "conflict").length;
   for (const group of groups.values()) {
     if (group.length < 2) continue;
     const orderedGroup = [...group].sort(eventOrder);
@@ -510,12 +546,105 @@ export function resolveTokenCountDuplicatesV5(
       });
     }
   }
-  const fullEvidence = options.detailLimit === undefined || analysis.examples.length >= analysis.candidatePairs
-    ? analysis.examples
-    : analyzeTokenCountDuplicatesV5(ordered, { detailLimit: Number.MAX_SAFE_INTEGER }).examples;
+  const exactRawContentDuplicateEvents = suppressed.length;
+
+  const eventByKey = new Map(ordered.map((event) => [eventEvidenceKey(event), event]));
+  const parent = new Map<string, string>();
+  const find = (key: string): string => {
+    const current = parent.get(key) ?? key;
+    if (current === key) {
+      parent.set(key, key);
+      return key;
+    }
+    const root = find(current);
+    parent.set(key, root);
+    return root;
+  };
+  const union = (left: string, right: string): void => {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) parent.set(rightRoot, leftRoot);
+  };
+  const eligible = fullEvidence.filter(semanticStrongSuppressible).filter((item) => {
+    const primaryKey = evidenceEventKey(item.sessionId, item.primaryRawIdentity, item.primaryEventIndex);
+    const candidateKey = evidenceEventKey(item.sessionId, item.candidateRawIdentity, item.candidateEventIndex);
+    return eventByKey.has(primaryKey) && eventByKey.has(candidateKey) &&
+      !suppressedIds.has(eventIdentity(eventByKey.get(primaryKey)!)) &&
+      !suppressedIds.has(eventIdentity(eventByKey.get(candidateKey)!));
+  });
+  for (const item of eligible) {
+    union(
+      evidenceEventKey(item.sessionId, item.primaryRawIdentity, item.primaryEventIndex),
+      evidenceEventKey(item.sessionId, item.candidateRawIdentity, item.candidateEventIndex),
+    );
+  }
+  const componentNodes = new Map<string, Set<string>>();
+  for (const item of eligible) {
+    for (const key of [
+      evidenceEventKey(item.sessionId, item.primaryRawIdentity, item.primaryEventIndex),
+      evidenceEventKey(item.sessionId, item.candidateRawIdentity, item.candidateEventIndex),
+    ]) {
+      const root = find(key);
+      const nodes = componentNodes.get(root) ?? new Set<string>();
+      nodes.add(key);
+      componentNodes.set(root, nodes);
+    }
+  }
+  const resolvedStrongEvidence = new Set<string>();
+  for (const [root, nodeSet] of componentNodes) {
+    const componentEvidence = eligible.filter((item) =>
+      find(evidenceEventKey(item.sessionId, item.primaryRawIdentity, item.primaryEventIndex)) === root);
+    const requiredRepresentatives = new Set<string>();
+    for (const item of componentEvidence) {
+      if (item.transitionClassification === "primary-only")
+        requiredRepresentatives.add(evidenceEventKey(item.sessionId, item.primaryRawIdentity, item.primaryEventIndex));
+      else if (item.transitionClassification === "candidate-only")
+        requiredRepresentatives.add(evidenceEventKey(item.sessionId, item.candidateRawIdentity, item.candidateEventIndex));
+    }
+    if (requiredRepresentatives.size > 1) {
+      duplicateConflicts += 1;
+      continue;
+    }
+    const nodes = [...nodeSet].map((key) => eventByKey.get(key)).filter((event): event is CodexAccountingEvent => !!event);
+    const representativeKey = requiredRepresentatives.values().next().value as string | undefined;
+    const representative = representativeKey ? eventByKey.get(representativeKey) : [...nodes].sort(eventOrder)[0];
+    if (!representative) {
+      duplicateConflicts += 1;
+      continue;
+    }
+    for (const item of componentEvidence) resolvedStrongEvidence.add(evidenceKey(item));
+    for (const candidate of nodes) {
+      if (eventEvidenceKey(candidate) === eventEvidenceKey(representative)) continue;
+      suppressedIds.add(eventIdentity(candidate));
+      suppressed.push({
+        sessionId: sessionOf(candidate),
+        representativeRawIdentity: representative.rawIdentity,
+        suppressedRawIdentity: candidate.rawIdentity,
+        kind: "semantic-snapshot",
+        confidence: "strong",
+        suppressedUsage: usageOf(usageRawOf(candidate)),
+        suppressedTokens: tokensOf(candidate),
+      });
+    }
+  }
+  const summary = summarizeTokenCountDuplicateEvidence(fullEvidence, options.detailLimit ?? 20);
+  const unresolvedEvidence = fullEvidence.filter((item) =>
+    item.confidence !== "confirmed" && !resolvedStrongEvidence.has(evidenceKey(item)));
+  const resolvedEvidence = fullEvidence.filter((item) => resolvedStrongEvidence.has(evidenceKey(item)));
+  summary.resolvedStrongPairs = resolvedEvidence.length;
+  summary.unresolvedPairs = unresolvedEvidence.length;
+  summary.unresolvedPrimaryTokens = unresolvedEvidence.reduce((sum, item) => sum + item.primaryTokens, 0);
+  summary.unresolvedCandidateTokens = unresolvedEvidence.reduce((sum, item) => sum + item.candidateTokens, 0);
+  summary.strongSuppressionCandidateTokens = resolvedEvidence.reduce((sum, item) => sum + item.candidateTokens, 0);
+  summary.resolvedStrongSuppressedTokens = suppressed
+    .filter((item) => item.confidence === "strong")
+    .reduce((sum, item) => sum + item.suppressedTokens, 0);
+  summary.representativeChoiceDelta = summarizeTokenCountDuplicateEvidence(resolvedEvidence, 0).representativeChoiceDelta;
+  const semanticSnapshotDuplicateEvents = suppressed.length - exactRawContentDuplicateEvents;
   const diagnostics: TokenCountDuplicateDiagnosticsV5 = {
-    exactRawContentDuplicateEvents: suppressed.length,
-    semanticDuplicateCandidates: fullEvidence.filter((item) => item.confidence !== "confirmed").length,
+    exactRawContentDuplicateEvents,
+    semanticSnapshotDuplicateEvents,
+    semanticDuplicateCandidates: summary.unresolvedPairs,
     suppressedDuplicateEvents: suppressed.length,
     suppressedDuplicateTokens: suppressed.reduce((sum, item) => sum + item.suppressedTokens, 0),
     duplicateConflicts,
@@ -525,7 +654,7 @@ export function resolveTokenCountDuplicatesV5(
     evidence: fullEvidence,
     suppressed,
     diagnostics,
-    summary: summarizeTokenCountDuplicateEvidence(fullEvidence, options.detailLimit ?? 20),
+    summary,
     safe: duplicateConflicts === 0,
   };
 }

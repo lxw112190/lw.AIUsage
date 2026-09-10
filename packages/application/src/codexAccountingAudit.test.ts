@@ -4,16 +4,18 @@ import { MemoryUsageRepository } from "@lw-aiusage/storage";
 import { CodexAccountingAuditService, compareRecords, resolveCollectorLogicalId } from "./codexAccountingAudit";
 
 describe("Codex accounting audit", () => {
-  it("reconciles the raw v4-equivalent with stored Codex records", async () => {
+  it("reconciles production v5 with stored Codex records", async () => {
     const platform = createFixturePlatform({
-      "/fixture/.codex/sessions/a.jsonl": `${JSON.stringify({ type: "session_meta", payload: { id: "a", model: "gpt-5" } })}\n${JSON.stringify({ type: "token_count", payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 12 } } } })}\n`,
+      "/fixture/.codex/sessions/a.jsonl": `${JSON.stringify({ type: "session_meta", payload: { id: "a", model: "gpt-5" } })}\n${JSON.stringify({ type: "token_count", timestamp: 100, payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 12 } } } })}\n`,
     });
     const repository = new MemoryUsageRepository();
     const service = new CodexAccountingAuditService(platform, repository);
     const report = await service.audit();
     expect(report.auditVersion).toBe(3);
-    expect(report.auditRevision).toBe(15);
-    expect(report.candidateAccountingRevision).toBe(1);
+    expect(report.auditRevision).toBe(19);
+    expect(report.candidateAccountingRevision).toBe(2);
+    expect(report.productionParserVersion).toBe(5);
+    expect(report.parserVersion).toBe(5);
     expect(report.snapshot.sourceStable).toBe(true);
     expect(report.snapshot.databaseStable).toBe(true);
     expect(report.snapshot.auditStable).toBe(true);
@@ -25,11 +27,12 @@ describe("Codex accounting audit", () => {
     expect(report.v5MigrationValidation.comparison.details).toBeDefined();
     expect(report.v5MigrationValidation.comparison.attribution).toBeDefined();
     expect(report.database.totalTokens).toBe(0);
+    expect(report.reconciliation.productionTokens).toBe(12);
     expect(report.reconciliation.differenceTokens).toBe(12);
     expect(report.reconciliation.matched).toBe(false);
   });
 
-  it("keeps V5 migration ready when the stable old database does not match the V4 mirror", async () => {
+  it("keeps V5 migration ready when the stable old database does not match production V5", async () => {
     const platform = createFixturePlatform({
       "/fixture/.codex/sessions/a.jsonl": [
         JSON.stringify({ type: "session_meta", payload: { id: "a", model: "gpt-5" } }),
@@ -69,7 +72,10 @@ describe("Codex accounting audit", () => {
 
   it("rejects a reconciliation when token components differ despite equal total", async () => {
     const platform = createFixturePlatform({
-      "/fixture/.codex/sessions/a.jsonl": `${JSON.stringify({ type: "token_count", payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 12 } } } })}\n`,
+      "/fixture/.codex/sessions/a.jsonl": [
+        JSON.stringify({ type: "session_meta", timestamp: 90, payload: { id: "a", model: "gpt-5" } }),
+        JSON.stringify({ type: "token_count", timestamp: 100, payload: { model: "gpt-5", info: { last_token_usage: { input_tokens: 12 } } } }),
+      ].join("\n") + "\n",
     });
     const repository = new MemoryUsageRepository();
     await repository.putRecords([{

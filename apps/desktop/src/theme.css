@@ -21,6 +21,17 @@
   background: #202632;
   color: var(--ink);
 }
+[data-theme="dark"] .secondary-action,
+[data-theme="dark"] .table-actions button {
+  background: #202632;
+  color: #a99dff;
+}
+[data-theme="dark"] .progress-track {
+  background: #303746;
+}
+[data-theme="dark"] .audit-result {
+  background: #1b202a;
+}
 [data-theme="dark"] nav a {
   color: #a8afbd;
 }

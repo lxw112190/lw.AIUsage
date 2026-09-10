@@ -49,7 +49,7 @@ describe("Codex v4-v5 accounting comparator", () => {
       tokenEvent(1, 110, 20, "b"),
     ])]);
 
-    expect(result.comparatorVersion).toBe(4);
+    expect(result.comparatorVersion).toBe(5);
     expect(result.v4.totalTokens).toBe(30);
     expect(result.v5.canonicalTokens).toBe(30);
     expect(result.difference.accountingTokens).toBe(0);
@@ -75,9 +75,64 @@ describe("Codex v4-v5 accounting comparator", () => {
     expect(result.productionSemantics).toMatchObject({
       tokenCountDuplicateSemantics: false,
       unresolvedSemanticCandidates: 1,
+      unresolvedPrimarySideTokens: 100,
+      unresolvedCandidateSideTokens: 100,
+      unresolvedAccountingDelta: 0,
       validated: false,
     });
     expect(result.readyForCollectorSwitch).toBe(false);
+  });
+
+  it("resolves a cumulative-transition strong duplicate for production semantics", () => {
+    const cumulativeEvent = (index: number, timestamp: number, last: number, total: number): CodexExtractedEvent => ({
+      ...tokenEvent(index, timestamp, last),
+      raw: {
+        type: "token_count",
+        timestamp,
+        payload: {
+          model: "gpt-5",
+          info: {
+            last_token_usage: { input_tokens: last, output_tokens: 0 },
+            total_token_usage: { input_tokens: total, output_tokens: 0, total_tokens: total },
+          },
+        },
+      },
+    });
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [
+      cumulativeEvent(0, 90, 100, 100),
+      cumulativeEvent(1, 100, 80, 180),
+      cumulativeEvent(2, 100, 70, 180),
+    ])]);
+
+    expect(result.v5.diagnostics.tokenCount).toMatchObject({
+      semanticSnapshotDuplicateEvents: 1,
+      semanticDuplicateCandidates: 0,
+      suppressedDuplicateEvents: 1,
+    });
+    expect(result.v5.diagnostics.tokenCount.duplicateEvidence).toMatchObject({
+      strongPairs: 1,
+      resolvedStrongPairs: 1,
+      unresolvedPairs: 0,
+    });
+    expect(result.productionSemantics).toMatchObject({
+      tokenCountDuplicateSemantics: true,
+      unresolvedSemanticCandidates: 0,
+      unresolvedPrimarySideTokens: 0,
+      unresolvedCandidateSideTokens: 0,
+    });
+    expect(result.universe.v4RecordMapping).toMatchObject({
+      resolvedBySemanticSuppressionRecords: 1,
+      ambiguousRecords: 0,
+    });
+    expect(result.attribution.byReason.find((item) => item.reason === "token-duplicate-representative")).toMatchObject({
+      events: 2,
+      v4Tokens: 70,
+      v5Tokens: 80,
+      delta: 10,
+    });
+    expect(result.attribution).toMatchObject({ unexplainedEvents: 0, mixedEvents: 0 });
+    expect(result.comparisonComplete).toBe(true);
+    expect(result.readyForCollectorSwitch).toBe(true);
   });
 
   it("attributes nested non-token usage to taxonomy correction", () => {
@@ -107,6 +162,51 @@ describe("Codex v4-v5 accounting comparator", () => {
     expect(changed?.reason).toBe("taxonomy-non-token-usage");
     expect(changed?.explained).toBe(true);
     expect(result.attribution.unexplainedDelta).toBe(0);
+    expect(result.readyForCollectorSwitch).toBe(true);
+  });
+
+  it("reports V5-only aggregate last usage that V4 dropped before model discovery", () => {
+    const withoutModel: CodexExtractedEvent = {
+      ...tokenEvent(0, 100, 0),
+      resolvedModel: undefined,
+      raw: {
+        type: "token_count",
+        timestamp: 100,
+        payload: {
+          info: {
+            last_token_usage: {
+              input_tokens: 0,
+              cached_input_tokens: 0,
+              output_tokens: 0,
+              reasoning_output_tokens: 0,
+              total_tokens: 80,
+            },
+            total_token_usage: { input_tokens: 100, output_tokens: 0, total_tokens: 100 },
+          },
+        },
+      },
+    };
+    const result = compareCodexV4V5([file("/sessions/a.jsonl", [withoutModel])]);
+
+    expect(result.v4.totalTokens).toBe(0);
+    expect(result.v5.canonicalTokens).toBe(80);
+    expect(result.v5.diagnostics.projection).toMatchObject({ unknownModelRecords: 1, unknownModelTokens: 80 });
+    expect(result.attribution).toMatchObject({
+      v5OnlyMissingModelEvents: 1,
+      v5OnlyMissingModelTokens: 80,
+      v5OnlyAggregateLastEvents: 1,
+      v5OnlyAggregateLastTokens: 80,
+      v5OnlyMissingModelAggregateLastEvents: 1,
+      v5OnlyMissingModelAggregateLastTokens: 80,
+    });
+    expect(result.attribution.byReason.find((item) => item.reason === "v4-missing-model")).toMatchObject({
+      events: 1,
+      v4Tokens: 0,
+      v5Tokens: 80,
+      delta: 80,
+    });
+    expect(result.attribution).toMatchObject({ unexplainedEvents: 0, mixedEvents: 0 });
+    expect(result.comparisonComplete).toBe(true);
     expect(result.readyForCollectorSwitch).toBe(true);
   });
 

@@ -30,6 +30,7 @@ import {
 import {
   resolveTokenCountDuplicatesV5,
   type CodexTokenCountDuplicateEvidenceSummary,
+  type TokenCountSuppressionV5,
 } from "./tokenCountDuplicateV5";
 import { decodeCodexFileV5, type CodexDecodedFileV5, type CodexParsedFileInputV5, type CodexV5DecodeDiagnostics } from "./eventDecoderV5";
 import {
@@ -46,6 +47,7 @@ export interface CodexV5SessionParseResult {
   parentSessionId?: string;
   forkTimestamp?: number;
   tokenCountRefs: CanonicalTokenCountRef[];
+  tokenCountSuppressions: TokenCountSuppressionV5[];
   payloadFallbacks: PayloadFallbackContribution[];
   canonicalBeforeForkReplay: CanonicalUsageContributionV5[];
   canonicalAfterForkReplay: CanonicalUsageContributionV5[];
@@ -73,6 +75,7 @@ export interface CodexV5TokenCountDiagnostics {
   duplicateEvidence: CodexTokenCountDuplicateEvidenceSummary;
   rawIdentityDuplicateEvents: number;
   exactRawContentDuplicateEvents: number;
+  semanticSnapshotDuplicateEvents: number;
   semanticDuplicateCandidates: number;
   suppressedDuplicateEvents: number;
   suppressedDuplicateTokens: number;
@@ -143,6 +146,7 @@ export interface CodexV5ParseResult {
 interface AccountSessionResult {
   session: CodexLogicalSessionV5;
   tokenCountRefs: CanonicalTokenCountRef[];
+  tokenCountSuppressions: TokenCountSuppressionV5[];
   payloadFallbacks: PayloadFallbackContribution[];
   canonical: CanonicalUsageContributionV5[];
   payloadDiagnostics: PayloadFallbackDiagnostics;
@@ -178,7 +182,11 @@ const emptyTokenDiagnostics = (): CodexV5TokenCountDiagnostics => ({
     confirmedCandidateTokens: 0,
     strongCandidateTokens: 0,
     probableCandidateTokens: 0,
+    unresolvedPrimaryTokens: 0,
     unresolvedCandidateTokens: 0,
+    resolvedStrongPairs: 0,
+    unresolvedPairs: 0,
+    resolvedStrongSuppressedTokens: 0,
     transition: { primaryOnly: 0, candidateOnly: 0, both: 0, neither: 0, reset: 0, incomparable: 0, insufficient: 0 },
     confirmedSuppressionTokens: 0,
     strongSuppressionCandidateTokens: 0,
@@ -188,6 +196,7 @@ const emptyTokenDiagnostics = (): CodexV5TokenCountDiagnostics => ({
   },
   rawIdentityDuplicateEvents: 0,
   exactRawContentDuplicateEvents: 0,
+  semanticSnapshotDuplicateEvents: 0,
   semanticDuplicateCandidates: 0,
   suppressedDuplicateEvents: 0,
   suppressedDuplicateTokens: 0,
@@ -207,7 +216,11 @@ const mergeDuplicateEvidence = (
   target.confirmedCandidateTokens += source.confirmedCandidateTokens;
   target.strongCandidateTokens += source.strongCandidateTokens;
   target.probableCandidateTokens += source.probableCandidateTokens;
+  target.unresolvedPrimaryTokens += source.unresolvedPrimaryTokens;
   target.unresolvedCandidateTokens += source.unresolvedCandidateTokens;
+  target.resolvedStrongPairs += source.resolvedStrongPairs;
+  target.unresolvedPairs += source.unresolvedPairs;
+  target.resolvedStrongSuppressedTokens += source.resolvedStrongSuppressedTokens;
   target.transition.primaryOnly += source.transition.primaryOnly;
   target.transition.candidateOnly += source.transition.candidateOnly;
   target.transition.both += source.transition.both;
@@ -287,6 +300,7 @@ const accountLogicalSession = (
   tokenDiagnostics.exactRawDuplicateEvents += deduplicated.exactDuplicateCount;
   tokenDiagnostics.rawIdentityDuplicateEvents += deduplicated.exactDuplicateCount;
   tokenDiagnostics.exactRawContentDuplicateEvents += duplicateResolution.diagnostics.exactRawContentDuplicateEvents;
+  tokenDiagnostics.semanticSnapshotDuplicateEvents += duplicateResolution.diagnostics.semanticSnapshotDuplicateEvents;
   tokenDiagnostics.semanticDuplicateCandidates += duplicateResolution.diagnostics.semanticDuplicateCandidates;
   tokenDiagnostics.suppressedDuplicateEvents += duplicateResolution.diagnostics.suppressedDuplicateEvents;
   tokenDiagnostics.suppressedDuplicateTokens += duplicateResolution.diagnostics.suppressedDuplicateTokens;
@@ -313,6 +327,7 @@ const accountLogicalSession = (
   return {
     session,
     tokenCountRefs,
+    tokenCountSuppressions: [...duplicateResolution.suppressed],
     payloadFallbacks: payloadResult.fallbacks,
     canonical: [...tokenCanonical, ...payloadCanonical].sort(canonicalOrder),
     payloadDiagnostics: payloadResult.diagnostics,
@@ -486,6 +501,7 @@ export function parseCodexFilesV5(
       parentSessionId: result.session.parentSessionId,
       forkTimestamp: result.session.forkTimestamp,
       tokenCountRefs: result.tokenCountRefs,
+      tokenCountSuppressions: result.tokenCountSuppressions,
       payloadFallbacks: result.payloadFallbacks,
       canonicalBeforeForkReplay: result.canonical,
       canonicalAfterForkReplay: kept,
@@ -497,7 +513,7 @@ export function parseCodexFilesV5(
     tokenCountDuplicateEvent: tokenDiagnostics.observedEvents ===
       tokenDiagnostics.canonicalEvents +
       tokenDiagnostics.rawIdentityDuplicateEvents +
-      tokenDiagnostics.exactRawContentDuplicateEvents,
+      tokenDiagnostics.suppressedDuplicateEvents,
     payloadEvent: accounted.every((result) => result.payloadEventInvariant),
     payloadToken: accounted.every((result) => result.payloadTokenInvariant),
     forkContribution: replay.contributionInvariant,

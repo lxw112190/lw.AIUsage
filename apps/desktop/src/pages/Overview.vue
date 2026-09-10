@@ -10,6 +10,7 @@ import { useSettingsStore } from "../stores/settings";
 import { useI18n } from "../i18n";
 import { formatTokenAmount, formatTokenDetail } from "../format";
 import type { ActivityCell, ActivityGranularity } from "@lw-aiusage/application";
+import type { PeriodComparison } from "@lw-aiusage/application";
 
 use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 const store = useOverviewStore();
@@ -19,6 +20,23 @@ const { t, locale } = useI18n();
 const chartElement = ref<HTMLElement>();
 let chart: ECharts | undefined;
 const format = (value: number): string => formatTokenAmount(value, { locale: locale.value });
+const healthState = computed(() => {
+  if (runtime.syncing) return "syncing";
+  if (runtime.error) return "error";
+  if (runtime.lastSyncResult?.diagnostics.length) return "warning";
+  if (runtime.lastSync) return "healthy";
+  return "pending";
+});
+const lastSyncText = computed(() => runtime.lastSync
+  ? new Date(runtime.lastSync).toLocaleString(locale.value === "zh" ? "zh-CN" : "en-US")
+  : t("overview.neverSynced"));
+const periodLabel = (period: PeriodComparison["period"]): string => t(`overview.period.${period}`);
+const comparisonText = (period: PeriodComparison): string => {
+  if (period.previousTokens === 0 && period.currentTokens > 0) return t("overview.newActivity");
+  if (period.changePercent === undefined || period.changePercent === 0) return "—";
+  const sign = period.changePercent > 0 ? "+" : "";
+  return `${sign}${period.changePercent.toFixed(1)}%`;
+};
 const trendModes: Array<{ value: ActivityGranularity; label: string }> = [
   { value: "daily", label: "overview.trendDaily" },
   { value: "weekly", label: "overview.trendWeekly" },
@@ -86,11 +104,19 @@ watch(trend, () => { void nextTick(renderChart); });
 <template>
   <section class="page">
     <article v-if="!store.data.records && !runtime.syncing" class="welcome-card"><div class="welcome-icon">✦</div><div><h2>{{ t("overview.welcomeTitle") }}</h2><p>{{ t("overview.welcomeText") }}</p></div><button class="sync-button" @click="runtime.sync">{{ t("overview.scan") }}</button></article>
+    <article class="panel health-panel" :class="`health-${healthState}`">
+      <div class="health-main"><span class="health-indicator"></span><div><strong>{{ t(`overview.health.${healthState}`) }}</strong><p>{{ t("overview.lastSync") }}：{{ lastSyncText }}</p></div></div>
+      <div v-if="runtime.syncing && runtime.syncProgress" class="sync-progress"><div class="sync-progress-label"><span>{{ runtime.syncProgress.source }}</span><span>{{ runtime.syncProgress.current }} / {{ runtime.syncProgress.total }}</span></div><div class="progress-track"><span :style="{ width: `${runtime.syncProgress.total ? runtime.syncProgress.current / runtime.syncProgress.total * 100 : 0}%` }"></span></div></div>
+      <div v-else class="health-meta"><span>{{ t("overview.filesScanned") }} <strong>{{ runtime.lastSyncResult?.files ?? 0 }}</strong></span><span>{{ t("overview.recordsChanged") }} <strong>{{ runtime.lastSyncResult?.inserted ?? 0 }}</strong></span><span>Codex Parser <strong>V{{ runtime.collectorVersions.codex }}</strong></span></div>
+    </article>
     <div class="stats-grid">
       <article class="stat-card primary"><span class="stat-label">{{ t("overview.totalTokens") }}</span><strong>{{ format(store.data.totalTokens) }}</strong><span class="stat-meta">{{ t("overview.allRecords") }}</span></article>
       <article class="stat-card"><span class="stat-label">{{ t("overview.usageRecords") }}</span><strong>{{ store.data.records.toLocaleString(locale === "zh" ? "zh-CN" : "en-US") }}</strong><span class="stat-meta">{{ t("overview.dedup") }}</span></article>
       <article class="stat-card"><span class="stat-label">{{ t("overview.activeAgents") }}</span><strong>{{ Object.keys(store.data.bySource).length }}</strong><span class="stat-meta">{{ t("overview.codexClaude") }}</span></article>
       <article class="stat-card"><span class="stat-label">{{ t("overview.estimatedCost") }}</span><strong>${{ store.data.estimatedCostUsd.toFixed(2) }}</strong><span class="stat-meta">{{ t("overview.publicRates") }}</span></article>
+    </div>
+    <div class="period-grid">
+      <article v-for="period in store.data.periods" :key="period.period" class="period-card"><span>{{ periodLabel(period.period) }}</span><strong>{{ format(period.currentTokens) }}</strong><div><small>{{ t("overview.previousComparable") }} {{ format(period.previousTokens) }}</small><em :class="{ positive: period.deltaTokens > 0, negative: period.deltaTokens < 0 }">{{ comparisonText(period) }}</em></div></article>
     </div>
     <div class="content-grid">
       <article class="panel chart-panel"><div class="panel-heading trend-heading"><div><h2>{{ t("overview.tokenTrend") }}</h2><p>{{ t("overview.tokenTrendDescription") }}</p></div><div class="trend-modes"><button v-for="mode in trendModes" :key="mode.value" :class="{ active: settings.activityGranularity === mode.value }" @click="changeTrend(mode.value)">{{ t(mode.label) }}</button></div></div><div ref="chartElement" class="chart"></div><div v-if="!store.data.records" class="empty-overlay">{{ t("overview.emptyTrend") }}</div></article>

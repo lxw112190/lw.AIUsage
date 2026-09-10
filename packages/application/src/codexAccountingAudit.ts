@@ -5,6 +5,8 @@ import {
   auditCodexPayloadUsageOverlap,
   auditCodexRaw,
   canonicalizeMirrorFiles,
+  codexExtractedFilesToV5Inputs,
+  parseCodexFilesV5,
   extractCodexFiles,
   replayCodexV4,
   snapshotCodexSource,
@@ -46,13 +48,13 @@ export interface CodexRecordReconciliation {
 
 export interface CodexAccountingAuditReport {
   auditVersion: 3;
-  auditRevision: 15;
-  candidateAccountingRevision: 1;
+  auditRevision: 19;
+  candidateAccountingRevision: 2;
   baselineParserVersion: 4;
   candidateParserVersion: 5;
-  productionParserVersion: 4;
+  productionParserVersion: 5;
   /** @deprecated Use the explicit baseline/candidate/production version fields. */
-  parserVersion: 4;
+  parserVersion: 5;
   accounting: "codex-accounting-audit-v3";
   generatedAt: number;
   snapshotStable: boolean;
@@ -71,16 +73,20 @@ export interface CodexAccountingAuditReport {
   database: SourceUsageSummary;
   reconciliation: {
     mirrorUsage: TokenUsage;
+    productionUsage: TokenUsage;
     databaseUsage: TokenUsage;
     differenceUsage: TokenUsage;
     mirrorTokens: number;
     parserEquivalentV4Tokens: number;
+    productionTokens: number;
     databaseTokens: number;
     differenceTokens: number;
     differencePercent: number;
     recordCount: number;
     mirrorRecordCount: number;
+    productionRecordCount: number;
     mirrorSessionCount: number;
+    productionSessionCount: number;
     databaseSessionCount: number;
     tokenMatched: boolean;
     usageComponentsMatched: boolean;
@@ -149,6 +155,7 @@ export class CodexAccountingAuditService {
     );
     const mirror = replayCodexV4(extracted);
     const comparison = compareCodexV4V5(extracted, { detailLimit: 20 });
+    const production = parseCodexFilesV5(codexExtractedFilesToV5Inputs(extracted));
     const { comparisonEntries: _comparisonEntries, ...compactComparison } = comparison;
     const afterSnapshot = await snapshotCodexSource(this.platform);
     const database = await this.repository.getSourceUsageSummary("codex");
@@ -156,16 +163,17 @@ export class CodexAccountingAuditService {
     const canonicalExtracted = canonicalizeMirrorFiles(extracted);
     const canonicalPaths = new Set(canonicalExtracted.map((file) => file.entry.path));
     const canonicalCursors = cursors.filter((cursor) => cursor.source === "codex" && canonicalPaths.has(cursor.path));
-    const recordDiff = buildRecordSetDiff([...mirror.records.values()], databaseRecords);
+    const recordDiff = buildRecordSetDiff(production.records, databaseRecords);
+    const v4RecordDiff = buildRecordSetDiff([...mirror.records.values()], databaseRecords);
     const eventTaxonomy = summarizeCodexExtractedEvents(canonicalExtracted);
     const forkHistory = auditCodexForkHistory(
       mirror.forkTraces,
       canonicalCursors,
       [...mirror.records.values()],
-      recordDiff,
+      v4RecordDiff,
     );
     const payloadUsageOverlap = auditCodexPayloadUsageOverlap(extracted);
-    const recordReconciliation = compareRecords([...mirror.records.values()], databaseRecords);
+    const recordReconciliation = compareRecords(production.records, databaseRecords);
     const sourceSnapshotStable = beforeSnapshot.fingerprint === afterSnapshot.fingerprint;
     const databaseStable = sameSummary(databaseBefore, database);
     const auditStable = sourceSnapshotStable && databaseStable;
@@ -180,20 +188,23 @@ export class CodexAccountingAuditService {
       readyForCollectorSwitch: sourceSnapshotStable && comparison.readyForCollectorSwitch,
     };
     const mirrorTokens = totalTokens(mirror.usage);
-    const differenceUsage = subtractUsage(mirror.usage, database.usage);
-    const differenceTokens = mirrorTokens - database.totalTokens;
+    const productionUsage = sumRecordUsage(production.records);
+    const productionTokens = totalTokens(productionUsage);
+    const productionSessionCount = new Set(production.records.flatMap((record) => record.sessionId ? [record.sessionId] : [])).size;
+    const differenceUsage = subtractUsage(productionUsage, database.usage);
+    const differenceTokens = productionTokens - database.totalTokens;
     const usageComponentsMatched = Object.values(differenceUsage).every((value) => value === 0);
     const tokenMatched = differenceTokens === 0;
-    const recordCountMatched = mirror.recordCount === database.recordCount;
-    const sessionCountMatched = mirror.sessionCount === database.sessionCount;
+    const recordCountMatched = production.records.length === database.recordCount;
+    const sessionCountMatched = productionSessionCount === database.sessionCount;
     return {
       auditVersion: 3,
-      auditRevision: 15,
-      candidateAccountingRevision: 1,
+      auditRevision: 19,
+      candidateAccountingRevision: 2,
       baselineParserVersion: 4,
       candidateParserVersion: 5,
-      productionParserVersion: 4,
-      parserVersion: 4,
+      productionParserVersion: 5,
+      parserVersion: 5,
       accounting: "codex-accounting-audit-v3",
       generatedAt: Date.now(),
       snapshotStable,
@@ -212,16 +223,20 @@ export class CodexAccountingAuditService {
       database,
       reconciliation: {
         mirrorUsage: mirror.usage,
+        productionUsage,
         databaseUsage: database.usage,
         differenceUsage,
         mirrorTokens,
         parserEquivalentV4Tokens: mirrorTokens,
+        productionTokens,
         databaseTokens: database.totalTokens,
         differenceTokens,
         differencePercent: database.totalTokens ? (differenceTokens / database.totalTokens) * 100 : 0,
         recordCount: database.recordCount,
         mirrorRecordCount: mirror.recordCount,
+        productionRecordCount: production.records.length,
         mirrorSessionCount: mirror.sessionCount,
+        productionSessionCount,
         databaseSessionCount: database.sessionCount,
         tokenMatched,
         usageComponentsMatched,
@@ -257,7 +272,7 @@ function signatureFingerprint(signatures: readonly string[]): string {
 }
 
 function buildRecordSetDiff(
-  mirrorRecords: readonly ParserV4MirrorRecord[],
+  mirrorRecords: readonly SourceAuditRecord[],
   databaseRecords: readonly SourceAuditRecord[],
 ): RecordSetDiff {
   const mirrorById = new Map(mirrorRecords.map((record) => [record.id, record]));
@@ -273,7 +288,7 @@ function buildRecordSetDiff(
 }
 
 export function compareRecords(
-  mirrorRecords: readonly ParserV4MirrorRecord[],
+  mirrorRecords: readonly SourceAuditRecord[],
   databaseRecords: readonly SourceAuditRecord[],
 ): CodexRecordReconciliation {
   const mirror = [...mirrorRecords].sort((left, right) => left.id.localeCompare(right.id));
@@ -308,6 +323,22 @@ export function compareRecords(
 function sameSummary(left: SourceUsageSummary, right: SourceUsageSummary): boolean {
   return left.recordCount === right.recordCount && left.sessionCount === right.sessionCount &&
     JSON.stringify(left.usage) === JSON.stringify(right.usage);
+}
+
+function sumRecordUsage(records: readonly SourceAuditRecord[]): TokenUsage {
+  return records.reduce<TokenUsage>((usage, record) => ({
+    inputTokens: usage.inputTokens + record.usage.inputTokens,
+    cachedInputTokens: usage.cachedInputTokens + record.usage.cachedInputTokens,
+    cacheCreationInputTokens: usage.cacheCreationInputTokens + record.usage.cacheCreationInputTokens,
+    outputTokens: usage.outputTokens + record.usage.outputTokens,
+    reasoningOutputTokens: usage.reasoningOutputTokens + record.usage.reasoningOutputTokens,
+  }), {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+  });
 }
 
 function subtractUsage(left: TokenUsage, right: TokenUsage): TokenUsage {

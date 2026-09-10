@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useUsageRecordsStore } from "../stores/usageRecords";
-import { projectDisplayName, totalTokens } from "@lw-aiusage/core";
+import { totalTokens } from "@lw-aiusage/core";
 import { useI18n } from "../i18n";
 import { formatTokenAmount } from "../format";
+import { useProjectPreferencesStore } from "../stores/projects";
+import { usageRecordsToCsv } from "../csv";
 
 const store = useUsageRecordsStore();
+const projects = useProjectPreferencesStore();
 const { t, locale } = useI18n();
 const format = (value: number): string => formatTokenAmount(value, { locale: locale.value });
 const dateTime = (value: number): string => new Date(value).toLocaleString(locale.value === "zh" ? "zh-CN" : "en-US");
@@ -18,11 +21,22 @@ const pages = computed(() => {
   if (end < store.totalPages) values.push(...(end < store.totalPages - 1 ? ["…"] : []), store.totalPages);
   return values;
 });
+async function exportCsv(): Promise<void> {
+  const records = await store.filteredRecords();
+  const csv = usageRecordsToCsv(records, projects.nameFor);
+  const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `lw-aiusage-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
 </script>
 
 <template>
   <section class="page">
-    <div class="page-heading"><div><h2>{{ t("usage.title") }}</h2><p>{{ t("usage.description") }}</p></div></div>
+    <div class="page-heading"><div><h2>{{ t("usage.title") }}</h2><p>{{ t("usage.description") }}</p></div><button class="secondary-action" @click="exportCsv">{{ t("usage.exportCsv") }}</button></div>
     <article class="panel filter-panel">
       <div class="filter-field"><label>{{ t("filter.from") }}</label><input v-model="store.fromDate" type="date" /></div>
       <div class="filter-field"><label>{{ t("filter.to") }}</label><input v-model="store.toDate" type="date" /></div>
@@ -35,7 +49,7 @@ const pages = computed(() => {
       <table>
         <thead><tr><th>{{ t("usage.time") }}</th><th>{{ t("filter.agent") }}</th><th>{{ t("filter.model") }}</th><th>{{ t("filter.project") }}</th><th>{{ t("usage.input") }} ({{ t("usage.tokenUnit") }})</th><th>{{ t("usage.cached") }} ({{ t("usage.tokenUnit") }})</th><th>{{ t("usage.output") }} ({{ t("usage.tokenUnit") }})</th><th>{{ t("usage.total") }} ({{ t("usage.tokenUnit") }})</th></tr></thead>
         <tbody>
-          <tr v-for="record in store.items" :key="record.id"><td>{{ dateTime(record.timestamp) }}</td><td><span class="source-badge">{{ record.source }}</span></td><td>{{ record.model }}</td><td>{{ projectDisplayName(record.projectKey) }}</td><td>{{ format(record.usage.inputTokens) }}</td><td>{{ format(record.usage.cachedInputTokens) }}</td><td>{{ format(record.usage.outputTokens) }}</td><td><strong>{{ format(totalTokens(record.usage)) }}</strong></td></tr>
+          <tr v-for="record in store.items" :key="record.id"><td>{{ dateTime(record.timestamp) }}</td><td><span class="source-badge">{{ record.source }}</span></td><td>{{ record.model }}</td><td>{{ projects.nameFor(record.projectKey) }}</td><td>{{ format(record.usage.inputTokens) }}</td><td>{{ format(record.usage.cachedInputTokens) }}</td><td>{{ format(record.usage.outputTokens) }}</td><td><strong>{{ format(totalTokens(record.usage)) }}</strong></td></tr>
           <tr v-if="!store.items.length"><td colspan="8" class="empty-cell">{{ t("usage.empty") }}</td></tr>
         </tbody>
       </table>

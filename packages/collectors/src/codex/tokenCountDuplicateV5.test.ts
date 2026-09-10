@@ -96,7 +96,12 @@ describe("Codex v5 TokenCount duplicate evidence", () => {
       event(2, { rawFingerprint: "b", total: cumulative() }),
     ]);
 
-    expect(result).toMatchObject({ probablePairs: 1, strongPairs: 0 });
+    expect(result).toMatchObject({
+      probablePairs: 1,
+      strongPairs: 0,
+      unresolvedPrimaryTokens: 100,
+      unresolvedCandidateTokens: 100,
+    });
     expect(result.examples[0]?.confidence).toBe("probable");
   });
 
@@ -144,11 +149,12 @@ describe("Codex v5 TokenCount duplicate evidence", () => {
   });
 
   it("uses the previous cumulative snapshot to classify a primary-only transition", () => {
-    const result = analyzeTokenCountDuplicatesV5([
+    const events = [
       event(0, { total: cumulative(100) }),
       event(1, { rawFingerprint: "primary", total: cumulative(180), last: raw({ input: 80, output: 0 }) }),
       event(2, { rawFingerprint: "candidate", total: cumulative(180), last: raw({ input: 70, output: 0 }) }),
-    ]);
+    ];
+    const result = analyzeTokenCountDuplicatesV5(events);
 
     expect(result.examples[0]).toMatchObject({
       confidence: "strong",
@@ -158,6 +164,16 @@ describe("Codex v5 TokenCount duplicate evidence", () => {
       transitionTokens: 80,
     });
     expect(result.transition.primaryOnly).toBe(1);
+    const resolved = resolveTokenCountDuplicatesV5(events);
+    expect(resolved.events.map((item) => item.eventIndex)).toEqual([0, 1]);
+    expect(resolved.suppressed[0]).toMatchObject({
+      representativeRawIdentity: "e1:hprimary",
+      suppressedRawIdentity: "e2:hcandidate",
+      kind: "semantic-snapshot",
+      confidence: "strong",
+      suppressedTokens: 70,
+    });
+    expect(resolved.summary).toMatchObject({ resolvedStrongPairs: 1, unresolvedPairs: 0, unresolvedCandidateTokens: 0 });
   });
 
   it("identifies candidate-only and both-transition evidence", () => {
@@ -167,6 +183,13 @@ describe("Codex v5 TokenCount duplicate evidence", () => {
       event(2, { rawFingerprint: "candidate", total: cumulative(180), last: raw({ input: 80, output: 0 }) }),
     ]);
     expect(candidateOnly.examples[0]).toMatchObject({ confidence: "strong", transitionClassification: "candidate-only" });
+    const candidateOnlyResolution = resolveTokenCountDuplicatesV5([
+      event(0, { total: cumulative(100) }),
+      event(1, { rawFingerprint: "primary", total: cumulative(180), last: raw({ input: 70, output: 0 }) }),
+      event(2, { rawFingerprint: "candidate", total: cumulative(180), last: raw({ input: 80, output: 0 }) }),
+    ]);
+    expect(candidateOnlyResolution.events.map((item) => item.eventIndex)).toEqual([0, 2]);
+    expect(candidateOnlyResolution.suppressed[0]).toMatchObject({ suppressedRawIdentity: "e1:hprimary", suppressedTokens: 70 });
 
     const both = analyzeTokenCountDuplicatesV5([
       event(0, { total: cumulative(100) }),
@@ -175,6 +198,13 @@ describe("Codex v5 TokenCount duplicate evidence", () => {
     ]);
     expect(both.examples[0]).toMatchObject({ confidence: "strong", transitionClassification: "both" });
     expect(both.transition.both).toBe(1);
+    const bothResolution = resolveTokenCountDuplicatesV5([
+      event(0, { total: cumulative(100) }),
+      event(1, { rawFingerprint: "primary", total: cumulative(180), last: raw({ input: 80, output: 0 }) }),
+      event(2, { rawFingerprint: "candidate", total: cumulative(180), last: raw({ input: 80, output: 0 }) }),
+    ]);
+    expect(bothResolution.events.map((item) => item.eventIndex)).toEqual([0, 1]);
+    expect(bothResolution.diagnostics).toMatchObject({ semanticSnapshotDuplicateEvents: 1, semanticDuplicateCandidates: 0 });
   });
 
   it("keeps transition evidence unresolved when there is no previous cumulative state", () => {
@@ -199,14 +229,19 @@ describe("Codex v5 TokenCount duplicate evidence", () => {
   });
 
   it("does not treat a transition matched by neither representation as safe suppression", () => {
-    const result = analyzeTokenCountDuplicatesV5([
+    const events = [
       event(0, { total: cumulative(100) }),
       event(1, { rawFingerprint: "primary", total: cumulative(180), last: raw({ input: 70, output: 0 }) }),
       event(2, { rawFingerprint: "candidate", total: cumulative(180), last: raw({ input: 60, output: 0 }) }),
-    ]);
+    ];
+    const result = analyzeTokenCountDuplicatesV5(events);
 
     expect(result.examples[0]).toMatchObject({ confidence: "probable", transitionClassification: "neither" });
     expect(result.transition.neither).toBe(1);
+    const resolved = resolveTokenCountDuplicatesV5(events);
+    expect(resolved.events).toHaveLength(3);
+    expect(resolved.suppressed).toHaveLength(0);
+    expect(resolved.summary.unresolvedPairs).toBe(1);
   });
 
   it("records the whitelisted semantic difference for matching snapshots", () => {
@@ -216,5 +251,19 @@ describe("Codex v5 TokenCount duplicate evidence", () => {
     ]);
 
     expect(result.examples[0]?.semanticDiffPaths).toEqual(["payload.rate_limits"]);
+  });
+
+  it("fails closed when one semantic component requires multiple representatives", () => {
+    const result = resolveTokenCountDuplicatesV5([
+      event(0, { total: cumulative(100) }),
+      event(1, { rawFingerprint: "first", total: cumulative(180), last: raw({ input: 70, output: 0 }) }),
+      event(2, { rawFingerprint: "second", total: cumulative(180), last: raw({ input: 80, output: 0 }) }),
+      event(3, { rawFingerprint: "third", total: cumulative(180), last: raw({ input: 80, output: 0 }) }),
+    ]);
+
+    expect(result.events).toHaveLength(4);
+    expect(result.suppressed).toHaveLength(0);
+    expect(result.diagnostics.duplicateConflicts).toBe(1);
+    expect(result.safe).toBe(false);
   });
 });
