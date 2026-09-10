@@ -107,9 +107,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view $env:GITHUB_REF_NAME *> $null
+          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:GITHUB_REF_NAME release/lw.AIUsage.exe release/SHA256SUMS.txt --clobber
+            gh release upload $env:GITHUB_REF_NAME release/lw.AIUsage.exe release/SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --clobber
           } else {
-            gh release create $env:GITHUB_REF_NAME release/lw.AIUsage.exe release/SHA256SUMS.txt --verify-tag --generate-notes --title "lw.AIUsage $env:GITHUB_REF_NAME"
+            gh release create $env:GITHUB_REF_NAME release/lw.AIUsage.exe release/SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --verify-tag --generate-notes --title "lw.AIUsage $env:GITHUB_REF_NAME"
           }
