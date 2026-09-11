@@ -1,4 +1,4 @@
-import { estimatedCostUsd, pricingForModel, totalTokens, type UsageRecord } from "@lw-aiusage/core";
+import { estimatedCostUsd, resolvePricing, totalTokens, type UsageRecord } from "@lw-aiusage/core";
 
 const csvCell = (value: string | number): string => {
   const text = String(value);
@@ -23,8 +23,11 @@ export function usageRecordsToCsv(
     "reasoning_output_tokens",
     "total_tokens",
     "estimated_cost_usd",
+    "pricing_status",
+    "pricing_label",
   ]];
   for (const record of records) {
+    const resolution = resolvePricing(record.model);
     rows.push([
       new Date(record.timestamp).toISOString(),
       record.source,
@@ -37,7 +40,9 @@ export function usageRecordsToCsv(
       record.usage.outputTokens,
       record.usage.reasoningOutputTokens,
       totalTokens(record.usage),
-      pricingForModel(record.model) ? estimatedCostUsd(record.usage, pricingForModel(record.model)!) : 0,
+      resolution.entry ? estimatedCostUsd(record.usage, resolution.entry) : "",
+      resolution.kind,
+      resolution.entry?.label ?? "",
     ]);
   }
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");

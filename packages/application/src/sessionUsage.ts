@@ -68,6 +68,7 @@ export interface SessionDetailData {
   timeline: SessionTimelinePoint[];
   records: UsageRecord[];
 }
+export interface SessionFilterOptions { models: string[]; projects: string[]; }
 
 interface SessionAccumulator {
   source: AgentSource;
@@ -158,6 +159,16 @@ export function aggregateUsageSessions(records: readonly UsageRecord[]): {
 
 export class SessionUsageService {
   constructor(private readonly repository: UsageRepository) {}
+
+  async filterOptions(): Promise<SessionFilterOptions> {
+    const [models, projects] = await Promise.all([this.repository.getModelOptions(), this.repository.getProjectOptions()]);
+    return { models, projects };
+  }
+
+  async topForProject(projectKey: string, limit = 5): Promise<UsageSessionSummary[]> {
+    const records = await this.repository.getRecords({ projectKey });
+    return aggregateUsageSessions(records).sessions.sort((left, right) => right.totalTokens - left.totalTokens).slice(0, Math.max(1, limit));
+  }
 
   async list(query: SessionListQuery): Promise<SessionListResult> {
     const records = await this.repository.getRecords(query.filters);

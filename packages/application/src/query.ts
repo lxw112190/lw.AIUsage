@@ -20,6 +20,7 @@ import type {
 } from "@lw-aiusage/storage";
 import { ActivityService, type ActivityGranularity, type ActivityViewData } from "./activity";
 import { dailyUsageFromBuckets } from "./dailyUsage";
+import { pricingCoverageForBuckets, type PricingCoverageSummary } from "./pricingCoverage";
 
 export interface UsageFilters extends UsageQuery {
   source?: AgentSource;
@@ -45,12 +46,14 @@ export interface DashboardData {
   estimatedCostUsd: number;
   usage: UsageRecord["usage"];
   cachedInputShare?: number;
+  pricingCoverage: PricingCoverageSummary;
   bySource: Record<string, number>;
   bySourceRecords: Record<string, number>;
   trend: DashboardTrendPoint[];
   periods: PeriodComparison[];
 }
 export type ComparisonPeriod = "today" | "week" | "month";
+export interface ComparablePeriodWindow { currentFrom: number; currentTo: number; previousFrom: number; previousTo: number; }
 export interface PeriodComparison {
   period: ComparisonPeriod;
   currentTokens: number;
@@ -152,19 +155,10 @@ const tokensBetween = (buckets: readonly UsageBucket[], from: number, to: number
   buckets.reduce((sum, bucket) => sum + (bucket.bucketStart >= from && bucket.bucketStart < to ? totalTokens(bucket.usage) : 0), 0);
 
 export function periodComparisons(buckets: readonly UsageBucket[], now = Date.now()): PeriodComparison[] {
-  const day = startOfLocalDay(now);
-  const week = startOfLocalWeek(now);
-  const month = startOfLocalMonth(now);
-  const periods: Array<{ period: ComparisonPeriod; currentStart: number; previousStart: number }> = [
-    { period: "today", currentStart: day, previousStart: addLocalDays(day, -1) },
-    { period: "week", currentStart: week, previousStart: addLocalDays(week, -7) },
-    { period: "month", currentStart: month, previousStart: previousLocalMonth(month) },
-  ];
-  return periods.map(({ period, currentStart, previousStart }) => {
-    const elapsed = Math.max(1, now - currentStart + 1);
-    const previousEnd = Math.min(currentStart, previousStart + elapsed);
-    const currentTokens = tokensBetween(buckets, currentStart, now + 1);
-    const previousTokens = tokensBetween(buckets, previousStart, previousEnd);
+  return (["today", "week", "month"] as const).map((period) => {
+    const window = comparablePeriodWindow(period, now);
+    const currentTokens = tokensBetween(buckets, window.currentFrom, window.currentTo);
+    const previousTokens = tokensBetween(buckets, window.previousFrom, window.previousTo);
     const deltaTokens = currentTokens - previousTokens;
     return {
       period,
@@ -174,6 +168,15 @@ export function periodComparisons(buckets: readonly UsageBucket[], now = Date.no
       ...(previousTokens > 0 ? { changePercent: (deltaTokens / previousTokens) * 100 } : {}),
     };
   });
+}
+
+export function comparablePeriodWindow(period: ComparisonPeriod, now = Date.now()): ComparablePeriodWindow {
+  const currentFrom = period === "today" ? startOfLocalDay(now) : period === "week" ? startOfLocalWeek(now) : startOfLocalMonth(now);
+  const currentTo = now + 1;
+  const elapsed = Math.max(1, currentTo - currentFrom);
+  const previousFrom = period === "today" ? addLocalDays(currentFrom, -1) : period === "week" ? addLocalDays(currentFrom, -7) : previousLocalMonth(currentFrom);
+  const previousTo = period === "month" ? Math.min(currentFrom, previousFrom + elapsed) : Math.min(currentFrom, previousFrom + elapsed);
+  return { currentFrom, currentTo, previousFrom, previousTo };
 }
 
 export class QueryService {
@@ -213,6 +216,7 @@ export class QueryService {
       totalTokens: tokens,
       estimatedCostUsd: cost,
       usage,
+      pricingCoverage: pricingCoverageForBuckets(buckets),
       ...(cachedInputShare(usage) === undefined ? {} : { cachedInputShare: cachedInputShare(usage) }),
       bySource,
       bySourceRecords,

@@ -5,7 +5,7 @@ import { QueryService, type ActivityGranularity, type ActivityViewData, type Das
 import { zeroUsage } from "@lw-aiusage/core";
 import { useUsageStore } from "./usage";
 
-const emptyDashboard = (): DashboardData => ({ records: 0, totalTokens: 0, estimatedCostUsd: 0, usage: zeroUsage(), bySource: {}, bySourceRecords: {}, trend: [], periods: [] });
+const emptyDashboard = (): DashboardData => ({ records: 0, totalTokens: 0, estimatedCostUsd: 0, usage: zeroUsage(), pricingCoverage: { totalTokens: 0, exactTokens: 0, aliasTokens: 0, fallbackTokens: 0, unmatchedTokens: 0, pricedTokens: 0, coverageRatio: 0, exactCoverage: 0, estimatedCostUsd: 0, models: [] }, bySource: {}, bySourceRecords: {}, trend: [], periods: [] });
 export const useOverviewStore = defineStore("overview", () => {
   const runtime = useUsageStore();
   const service = new QueryService(new DexieUsageRepository());

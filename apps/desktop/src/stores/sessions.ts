@@ -11,6 +11,8 @@ export const useSessionsStore = defineStore("sessions", () => {
   const detail = ref<SessionDetailData>();
   const loading = ref(false);
   const error = ref<string>();
+  const modelOptions = ref<string[]>([]);
+  const projectKeys = ref<string[]>([]);
   let sequence = 0;
   async function load(filters: SessionFilters = {}, order: SessionSort = "recent", page = 1): Promise<void> {
     const current = ++sequence;
@@ -19,6 +21,8 @@ export const useSessionsStore = defineStore("sessions", () => {
   }
   async function loadDetail(source: "codex" | "claude", sessionId: string): Promise<void> { detail.value = await service.detail(source, sessionId); }
   function clearDetail(): void { detail.value = undefined; }
-  watch(() => runtime.dataRevision, () => { void load(); });
-  return { data, detail, loading, error, load, loadDetail, clearDetail, pageSizeOptions: [20, 50, 100] as const };
+  async function loadOptions(): Promise<void> { const value = await service.filterOptions(); modelOptions.value = value.models; projectKeys.value = value.projects; }
+  watch(() => runtime.dataRevision, () => { void load(); void loadOptions(); });
+  void loadOptions();
+  return { data, detail, loading, error, modelOptions, projectKeys, load, loadDetail, clearDetail, loadOptions, pageSizeOptions: [20, 50, 100] as const };
 });

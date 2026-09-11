@@ -50,7 +50,7 @@ async function toggleProject(key: string): Promise<void> {
   }
 }
 function openModel(key: string): void { void router.push({ path: "/usage", query: { model: key } }); }
-function openProject(key: string): void { void router.push({ path: "/usage", query: { project: key } }); }
+function openProject(key: string): void { void router.push({ path: "/project", query: { key } }); }
 </script>
 
 <template>

@@ -10,3 +10,6 @@ export * from "./codexAccountingAudit";
 export * from "./activity";
 export * from "./dailyUsage";
 export * from "./sessionUsage";
+export * from "./pricingCoverage";
+export * from "./projectInsights";
+export * from "./changeDrivers";

@@ -4,9 +4,11 @@ import { useSettingsStore, type ThemeMode } from "../stores/settings";
 import { useUsageStore } from "../stores/usage";
 import { useI18n } from "../i18n";
 import { formatTokenAmount } from "../format";
+import { useOverviewStore } from "../stores/overview";
 
 const settings = useSettingsStore();
 const usage = useUsageStore();
+const overview = useOverviewStore();
 const { t, locale } = useI18n();
 const busy = ref(false);
 const auditBusy = ref(false);
@@ -73,6 +75,11 @@ async function runRawAudit(): Promise<void> {
       </div>
     </div>
     <article class="panel settings-panel">
+      <div class="pricing-panel">
+        <div class="panel-heading"><div><h3>{{ t("settings.pricing") }}</h3><p>{{ t("settings.pricingDescription") }}</p></div><strong>{{ (overview.data.pricingCoverage.coverageRatio * 100).toFixed(1) }}%</strong></div>
+        <div class="pricing-coverage-grid"><span>{{ t("settings.pricingExact") }} <strong>{{ (overview.data.pricingCoverage.exactCoverage * 100).toFixed(1) }}%</strong></span><span>{{ t("settings.pricingFallback") }} <strong>{{ formatTokens(overview.data.pricingCoverage.fallbackTokens) }}</strong></span><span>{{ t("settings.pricingUnmatched") }} <strong>{{ formatTokens(overview.data.pricingCoverage.unmatchedTokens) }}</strong></span></div>
+        <div class="pricing-model-list"><div v-for="item in overview.data.pricingCoverage.models" :key="item.model"><span>{{ item.model }}</span><span class="pricing-kind" :class="`pricing-${item.kind}`">{{ item.kind }}</span><strong>{{ formatTokens(item.totalTokens) }}</strong></div></div>
+      </div>
       <div class="setting-row">
         <div>
           <h3>{{ t("settings.language") }}</h3>

@@ -13,6 +13,8 @@ import { localDateKey } from "../usageRoute";
 import { formatTokenAmount, formatTokenDetail } from "../format";
 import type { ActivityCell, ActivityGranularity } from "@lw-aiusage/application";
 import type { PeriodComparison } from "@lw-aiusage/application";
+import { useChangeDriversStore } from "../stores/changeDrivers";
+import type { ChangeDimension, ComparisonPeriod } from "@lw-aiusage/application";
 
 use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 const store = useOverviewStore();
@@ -20,6 +22,9 @@ const runtime = useUsageStore();
 const settings = useSettingsStore();
 const { t, locale } = useI18n();
 const router = useRouter();
+const drivers = useChangeDriversStore();
+const driverPeriod = ref<ComparisonPeriod>("today");
+const driverDimension = ref<ChangeDimension>("project");
 const chartElement = ref<HTMLElement>();
 let chart: ECharts | undefined;
 const format = (value: number): string => formatTokenAmount(value, { locale: locale.value });
@@ -40,8 +45,14 @@ const comparisonText = (period: PeriodComparison): string => {
   const sign = period.changePercent > 0 ? "+" : "";
   return `${sign}${period.changePercent.toFixed(1)}%`;
 };
-function openPeriod(period: PeriodComparison["period"]): void { void router.push({ path: "/usage", query: { preset: period === "today" ? "today" : period === "week" ? "last7" : "thisMonth" } }); }
+function openPeriod(period: PeriodComparison["period"]): void { void router.push({ path: "/usage", query: { preset: period === "today" ? "today" : period === "week" ? "thisWeek" : "thisMonth" } }); }
 function openAgent(source: string): void { void router.push({ path: "/usage", query: { source } }); }
+const driverTabs: Array<{ value: ChangeDimension; label: string }> = [{ value: "project", label: "overview.driversProjects" }, { value: "model", label: "overview.driversModels" }, { value: "source", label: "overview.driversAgents" }];
+const driverPeriodTabs: Array<{ value: ComparisonPeriod; label: string }> = [{ value: "today", label: "overview.period.today" }, { value: "week", label: "overview.period.week" }, { value: "month", label: "overview.period.month" }];
+const currentDrivers = computed(() => { const result = drivers.data; if (!result) return []; return driverDimension.value === "project" ? result.byProject : driverDimension.value === "model" ? result.byModel : result.bySource; });
+const driverDelta = (value: number): string => `${value > 0 ? "+" : ""}${format(value)}`;
+function loadDrivers(period: ComparisonPeriod): void { driverPeriod.value = period; void drivers.load(period); }
+function openDriver(key: string): void { if (!drivers.data) return; const query: Record<string, string> = { from: localDateKey(drivers.data.from), to: localDateKey(drivers.data.to - 1), preset: "custom" }; if (driverDimension.value === "project") query.project = key; if (driverDimension.value === "model") query.model = key; if (driverDimension.value === "source") query.source = key; void router.push({ path: "/usage", query }); }
 const trendModes: Array<{ value: ActivityGranularity; label: string }> = [
   { value: "daily", label: "overview.trendDaily" },
   { value: "weekly", label: "overview.trendWeekly" },
@@ -88,6 +99,7 @@ function formatTrendTooltip(params: unknown): string {
 }
 function changeTrend(value: ActivityGranularity): void { settings.setActivityGranularity(value); }
 void store.loadActivity(settings.activityGranularity);
+void drivers.load(driverPeriod.value);
 watch(() => settings.activityGranularity, (value) => { void store.loadActivity(value); });
 function renderChart(): void {
   if (!chartElement.value) return;
@@ -126,7 +138,7 @@ watch(trend, () => { void nextTick(renderChart); });
       <article class="stat-card primary"><span class="stat-label">{{ t("overview.totalTokens") }}</span><strong>{{ format(store.data.totalTokens) }}</strong><span class="stat-meta">{{ t("overview.allRecords") }} · {{ t("overview.cachedShare") }} {{ store.data.cachedInputShare === undefined ? "—" : `${(store.data.cachedInputShare * 100).toFixed(1)}%` }}</span></article>
       <article class="stat-card"><span class="stat-label">{{ t("overview.usageRecords") }}</span><strong>{{ store.data.records.toLocaleString(locale === "zh" ? "zh-CN" : "en-US") }}</strong><span class="stat-meta">{{ t("overview.dedup") }}</span></article>
       <article class="stat-card"><span class="stat-label">{{ t("overview.activeAgents") }}</span><strong>{{ Object.keys(store.data.bySource).length }}</strong><span class="stat-meta">{{ t("overview.codexClaude") }}</span></article>
-      <article class="stat-card"><span class="stat-label">{{ t("overview.estimatedCost") }}</span><strong>${{ store.data.estimatedCostUsd.toFixed(2) }}</strong><span class="stat-meta">{{ t("overview.publicRates") }}</span></article>
+      <article class="stat-card"><span class="stat-label">{{ t("overview.estimatedCost") }}</span><strong>${{ store.data.estimatedCostUsd.toFixed(2) }}</strong><span class="stat-meta">{{ t("overview.pricingCoverage") }} {{ (store.data.pricingCoverage.coverageRatio * 100).toFixed(1) }}%</span></article>
     </div>
     <div class="period-grid">
       <article v-for="period in store.data.periods" :key="period.period" class="period-card clickable-card" @click="openPeriod(period.period)"><span>{{ periodLabel(period.period) }}</span><strong>{{ format(period.currentTokens) }}</strong><div><small>{{ t("overview.previousComparable") }} {{ format(period.previousTokens) }}</small><em :class="{ positive: period.deltaTokens > 0, negative: period.deltaTokens < 0 }">{{ comparisonText(period) }}</em></div></article>
@@ -135,5 +147,6 @@ watch(trend, () => { void nextTick(renderChart); });
       <article class="panel chart-panel"><div class="panel-heading trend-heading"><div><h2>{{ t("overview.tokenTrend") }}</h2><p>{{ t("overview.tokenTrendDescription") }}</p></div><div class="trend-modes"><button v-for="mode in trendModes" :key="mode.value" :class="{ active: settings.activityGranularity === mode.value }" @click="changeTrend(mode.value)">{{ t(mode.label) }}</button></div></div><div ref="chartElement" class="chart"></div><div v-if="!store.data.records" class="empty-overlay">{{ t("overview.emptyTrend") }}</div></article>
       <article class="panel"><div class="panel-heading"><div><h2>{{ t("overview.agentBreakdown") }}</h2><p>{{ t("overview.tokensBySource") }}</p></div></div><div v-if="Object.keys(store.data.bySource).length" class="breakdown"><div v-for="(value, key) in store.data.bySource" :key="key" class="breakdown-row clickable-card" @click="openAgent(key)"><div><span class="agent-icon">{{ key === "codex" ? "C" : "A" }}</span><span>{{ key }}</span></div><strong>{{ format(value) }}</strong></div></div><div v-else class="empty-state">{{ t("overview.noAgentData") }}</div></article>
     </div>
+    <article class="panel change-drivers-panel"><div class="panel-heading"><div><h2>{{ t("overview.changeDrivers") }}</h2><p>{{ t("overview.changeDriversDescription") }}</p></div><div class="trend-modes"><button v-for="period in driverPeriodTabs" :key="period.value" :class="{ active: driverPeriod === period.value }" @click="loadDrivers(period.value)">{{ t(period.label) }}</button></div></div><div class="driver-toolbar"><button v-for="tab in driverTabs" :key="tab.value" :class="{ active: driverDimension === tab.value }" @click="driverDimension = tab.value">{{ t(tab.label) }}</button></div><div v-if="drivers.loading" class="empty-state">{{ t("overview.loadingDrivers") }}</div><div v-else-if="!currentDrivers.length" class="empty-state">{{ t("overview.noDriverData") }}</div><div v-else class="driver-list"><div v-for="item in currentDrivers.slice(0, 6)" :key="item.key" class="driver-row clickable-card" @click="openDriver(item.key)"><div><strong>{{ item.key }}</strong><small>{{ t(`overview.driver.${item.state}`) }}</small></div><div><strong :class="{ positive: item.deltaTokens > 0, negative: item.deltaTokens < 0 }">{{ driverDelta(item.deltaTokens) }}</strong><small>{{ item.changePercent === undefined ? "—" : `${item.changePercent > 0 ? '+' : ''}${item.changePercent.toFixed(1)}%` }}</small></div></div></div></article>
   </section>
 </template>

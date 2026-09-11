@@ -1,7 +1,7 @@
 import type { LocationQuery, LocationQueryRaw } from "vue-router";
 import type { AgentSource } from "@lw-aiusage/core";
 
-export type UsageDatePreset = "today" | "yesterday" | "last7" | "last30" | "thisMonth" | "lastMonth" | "all" | "custom";
+export type UsageDatePreset = "today" | "yesterday" | "thisWeek" | "last7" | "last30" | "thisMonth" | "lastMonth" | "all" | "custom";
 export interface ResolvedUsageRoute {
   preset: UsageDatePreset;
   from?: number;
@@ -12,6 +12,9 @@ export interface ResolvedUsageRoute {
   model?: string;
   projectKey?: string;
   sessionId?: string;
+  page: number;
+  pageSize: number;
+  sort?: string;
 }
 
 const scalar = (value: LocationQuery[string] | undefined): string | undefined => {
@@ -43,8 +46,17 @@ const startOfToday = (now: number): number => {
   const date = new Date(now);
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 };
+const startOfLocalWeek = (timestamp: number): number => {
+  const date = new Date(timestamp);
+  const day = date.getDay();
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() - (day === 0 ? 6 : day - 1)).getTime();
+};
 const validPreset = (value?: string): UsageDatePreset =>
-  value === "today" || value === "yesterday" || value === "last7" || value === "last30" || value === "thisMonth" || value === "lastMonth" || value === "custom" ? value : "all";
+  value === "today" || value === "yesterday" || value === "thisWeek" || value === "last7" || value === "last30" || value === "thisMonth" || value === "lastMonth" || value === "custom" ? value : "all";
+const positiveInt = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
 
 export function localDateKey(timestamp: number): string { return dateKey(new Date(timestamp)); }
 
@@ -56,6 +68,7 @@ export function parseUsageRouteQuery(query: LocationQuery, now = Date.now()): Re
   let toDate = scalar(query.to) ?? "";
   if (preset === "today") { from = today; toDate = dateKey(new Date(today)); }
   if (preset === "yesterday") { from = addDays(today, -1); toDate = dateKey(new Date(from)); }
+  if (preset === "thisWeek") { from = startOfLocalWeek(today); toDate = dateKey(new Date(today)); }
   if (preset === "last7") { from = addDays(today, -6); toDate = dateKey(new Date(today)); }
   if (preset === "last30") { from = addDays(today, -29); toDate = dateKey(new Date(today)); }
   if (preset === "thisMonth") {
@@ -81,6 +94,9 @@ export function parseUsageRouteQuery(query: LocationQuery, now = Date.now()): Re
     model: scalar(query.model),
     projectKey: scalar(query.project),
     sessionId: scalar(query.session),
+    page: positiveInt(scalar(query.page), 1),
+    pageSize: [20, 30, 50, 100].includes(positiveInt(scalar(query.pageSize), 50)) ? positiveInt(scalar(query.pageSize), 50) : 50,
+    sort: scalar(query.sort),
   };
 }
 
@@ -93,5 +109,8 @@ export function buildUsageRouteQuery(filters: Partial<ResolvedUsageRoute>): Loca
   if (filters.model) query.model = filters.model;
   if (filters.projectKey) query.project = filters.projectKey;
   if (filters.sessionId) query.session = filters.sessionId;
+  if (filters.page && filters.page > 1) query.page = String(filters.page);
+  if (filters.pageSize && filters.pageSize !== 50) query.pageSize = String(filters.pageSize);
+  if (filters.sort) query.sort = filters.sort;
   return query;
 }
