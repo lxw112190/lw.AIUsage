@@ -101,7 +101,16 @@ export function resolvePricing(
   if (exact) return { rawModel, normalizedModel, kind: "exact", entry: exact, estimated: false };
   const alias = pricing.find((entry) => (entry.aliases ?? []).some((model) => normalizePricingModel(model) === normalizedModel));
   if (alias) return { rawModel, normalizedModel, kind: "alias", entry: alias, estimated: true };
-  const family = pricing.find((entry) => (entry.familyFallbacks ?? [entry.match]).some((model) => includesFamily(normalizedModel, normalizePricingModel(model))));
+  const families: Array<{ entry: PricingEntry; family: string }> = [];
+  for (const entry of pricing) {
+    for (const rawFamily of entry.familyFallbacks ?? [entry.match]) {
+      const family = normalizePricingModel(rawFamily);
+      if (includesFamily(normalizedModel, family)) families.push({ entry, family });
+    }
+  }
+  families.sort((left, right) =>
+    right.family.length - left.family.length || left.entry.id.localeCompare(right.entry.id));
+  const family = families[0]?.entry;
   if (family) return { rawModel, normalizedModel, kind: "family-fallback", entry: family, estimated: true };
   return { rawModel, normalizedModel, kind: "unmatched", estimated: true };
 }

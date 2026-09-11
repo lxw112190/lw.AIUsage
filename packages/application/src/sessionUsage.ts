@@ -165,9 +165,18 @@ export class SessionUsageService {
     return { models, projects };
   }
 
-  async topForProject(projectKey: string, limit = 5): Promise<UsageSessionSummary[]> {
-    const records = await this.repository.getRecords({ projectKey });
-    return aggregateUsageSessions(records).sessions.sort((left, right) => right.totalTokens - left.totalTokens).slice(0, Math.max(1, limit));
+  async topForProject(
+    projectKey: string,
+    options: { from?: number; to?: number; limit?: number } = {},
+  ): Promise<UsageSessionSummary[]> {
+    const records = await this.repository.getRecords({
+      projectKey,
+      ...(options.from === undefined ? {} : { from: options.from }),
+      ...(options.to === undefined ? {} : { to: options.to }),
+    });
+    return aggregateUsageSessions(records).sessions
+      .sort((left, right) => right.totalTokens - left.totalTokens || right.lastActiveAt - left.lastActiveAt)
+      .slice(0, Math.max(1, options.limit ?? 5));
   }
 
   async list(query: SessionListQuery): Promise<SessionListResult> {

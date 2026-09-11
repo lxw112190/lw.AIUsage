@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { computed, onMounted } from "vue";
 import { RouterLink, RouterView } from "vue-router";
 import { useUsageStore } from "./stores/usage";
 import { useSettingsStore } from "./stores/settings";
@@ -7,12 +7,15 @@ import { useI18n } from "./i18n";
 const store = useUsageStore();
 const settings = useSettingsStore();
 const { t } = useI18n();
+const syncLabel = computed(() => store.syncing
+  ? (store.syncReason === "startup" ? t("header.checking") : t("header.syncing"))
+  : t("header.syncNow"));
 function changeLanguage(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   settings.setLanguage(value === "zh" ? "zh" : "en");
 }
-onMounted(async () => {
-  await store.sync();
+onMounted(() => {
+  void store.bootstrap();
 });
 </script>
 <template>
@@ -58,7 +61,7 @@ onMounted(async () => {
             :disabled="store.syncing"
             @click="store.sync"
           >
-            {{ store.syncing ? t("header.syncing") : t("header.syncNow") }}
+            {{ syncLabel }}
             <span>↻</span>
           </button>
         </div>

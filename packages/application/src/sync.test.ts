@@ -82,6 +82,45 @@ describe("SyncManager", () => {
     expect(scans).toBe(1);
   });
 
+  it("runs one follow-up scan when a change arrives during an active scan", async () => {
+    let size = 10;
+    let scans = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const collector: Collector = {
+      source: "codex",
+      name: "Race test",
+      parserVersion: 1,
+      scanMode: "file",
+      fileReconcileMode: "logical-singleton",
+      roots: async () => [],
+      detect: async () => ({ installed: true, dataAvailable: true, roots: [] }),
+      discoverFiles: async () => [{ path: "/race.jsonl", name: "race.jsonl", isFile: true, isDirectory: false, size, modifiedAt: size, source: "codex" }],
+      scanFile: async ({ file }): Promise<FileScanResult> => {
+        scans += 1;
+        const scannedSize = file.size;
+        if (scans === 1) await gate;
+        return {
+          records: [{ id: `race:${scans}`, source: "codex", sourcePath: file.path, timestamp: scans, model: "gpt-5", projectKey: "race", usage: { inputTokens: scannedSize, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 } }],
+          diagnostics: [],
+          cursor: { key: `codex:${file.path}`, source: "codex", path: file.path, offset: scannedSize, size: scannedSize, modifiedAt: scannedSize, pendingText: "", parserVersion: 1 },
+        };
+      },
+    };
+    const repository = new MemoryUsageRepository();
+    const manager = new SyncManager(createFixturePlatform({}), repository, [collector]);
+    const firstPromise = manager.sync();
+    await Promise.resolve();
+    size = 20;
+    const concurrentPromise = manager.sync();
+    release();
+    const [first, concurrent] = await Promise.all([firstPromise, concurrentPromise]);
+    expect(scans).toBe(2);
+    expect(first.changedRecords).toBe(2);
+    expect(concurrent.changedRecords).toBe(2);
+    expect((await repository.getRecords()).map((record) => record.usage.inputTokens)).toEqual([10, 20]);
+  });
+
   it("scans a source as a whole, skips unchanged snapshots, and retries parser upgrades", async () => {
     const files: CollectorFile[] = [
       { path: "/fixture/.codex/sessions/a.jsonl", name: "a.jsonl", isFile: true, isDirectory: false, size: 10, modifiedAt: 1, source: "codex", logicalId: "session-a" },

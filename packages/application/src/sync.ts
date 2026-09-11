@@ -14,13 +14,36 @@ import { QueryService } from "./query";
 
 export interface SyncResult {
   files: number;
-  inserted: number;
-  skipped: number;
+  changedRecords: number;
+  skippedFiles: number;
   diagnostics: string[];
+  /** @deprecated Use changedRecords. */
+  inserted: number;
+  /** @deprecated Use skippedFiles. */
+  skipped: number;
 }
+
+const emptySyncResult = (): SyncResult => ({
+  files: 0,
+  changedRecords: 0,
+  skippedFiles: 0,
+  diagnostics: [],
+  inserted: 0,
+  skipped: 0,
+});
+
+const mergeSyncResults = (left: SyncResult, right: SyncResult): SyncResult => ({
+  files: left.files + right.files,
+  changedRecords: left.changedRecords + right.changedRecords,
+  skippedFiles: left.skippedFiles + right.skippedFiles,
+  diagnostics: [...left.diagnostics, ...right.diagnostics],
+  inserted: left.changedRecords + right.changedRecords,
+  skipped: left.skippedFiles + right.skippedFiles,
+});
 export class SyncManager {
   private watching = false;
   private activeSync?: Promise<SyncResult>;
+  private resyncRequested = false;
   private watchManager?: WatchManager;
   constructor(
     private readonly platform: RuntimePlatform,
@@ -31,8 +54,11 @@ export class SyncManager {
   async sync(
     onProgress?: (progress: CollectorProgress) => void,
   ): Promise<SyncResult> {
-    if (this.activeSync) return this.activeSync;
-    const operation = this.syncInternal(onProgress);
+    if (this.activeSync) {
+      this.resyncRequested = true;
+      return this.activeSync;
+    }
+    const operation = this.runSyncLoop(onProgress);
     this.activeSync = operation;
     try {
       return await operation;
@@ -43,12 +69,22 @@ export class SyncManager {
   async waitForIdle(): Promise<void> {
     await this.activeSync;
   }
+  private async runSyncLoop(
+    onProgress?: (progress: CollectorProgress) => void,
+  ): Promise<SyncResult> {
+    let result = emptySyncResult();
+    do {
+      this.resyncRequested = false;
+      result = mergeSyncResults(result, await this.syncInternal(onProgress));
+    } while (this.resyncRequested);
+    return result;
+  }
   private async syncInternal(
     onProgress?: (progress: CollectorProgress) => void,
   ): Promise<SyncResult> {
     let files = 0;
-    let inserted = 0;
-    let skipped = 0;
+    let changedRecords = 0;
+    let skippedFiles = 0;
     const diagnostics: string[] = [];
     const cursors = await this.repository.getCursors();
     for (const collector of this.collectors) {
@@ -61,7 +97,7 @@ export class SyncManager {
       files += discovered.length;
       if (collector.scanMode === "source") {
         if (!sourceNeedsScan(collector, discovered, cursors)) {
-          skipped += discovered.length;
+          skippedFiles += discovered.length;
           continue;
         }
         const scanned = await collector.scanSource({
@@ -84,7 +120,7 @@ export class SyncManager {
           scanned.cursors,
           nextBuckets,
         );
-        inserted += replaced.recordChanges;
+        changedRecords += replaced.recordChanges;
         continue;
       }
       const reconciled = await reconcileCollectorFiles(
@@ -95,7 +131,7 @@ export class SyncManager {
         cursors,
       );
       for (const item of reconciled) {
-        if (item.shadowDuplicate) { skipped += 1; continue; }
+        if (item.shadowDuplicate) { skippedFiles += 1; continue; }
         const file = item.file;
         const cursor = item.cursor ?? cursors.find((candidate) => candidate.key === `${collector.source}:${file.path}`);
         if (
@@ -106,7 +142,7 @@ export class SyncManager {
           cursor.modifiedAt === file.modifiedAt &&
           cursor.offset >= file.size
         ) {
-          skipped += 1;
+          skippedFiles += 1;
           continue;
         }
         const scanned = await collector.scanFile({
@@ -117,7 +153,7 @@ export class SyncManager {
           parser: this.parser,
           onProgress,
         });
-        inserted += await this.repository.commitScan(
+        changedRecords += await this.repository.commitScan(
           scanned.records,
           scanned.cursor,
           { replaceRecords: scanned.replaceRecords },
@@ -125,11 +161,18 @@ export class SyncManager {
         diagnostics.push(...scanned.diagnostics);
       }
     }
-    if (inserted > 0) {
+    if (changedRecords > 0) {
       const allRecords = await this.repository.getRecords();
       await this.repository.putBuckets(aggregateBuckets(allRecords));
     }
-    return { files, inserted, skipped, diagnostics };
+    return {
+      files,
+      changedRecords,
+      skippedFiles,
+      diagnostics,
+      inserted: changedRecords,
+      skipped: skippedFiles,
+    };
   }
   async startWatching(
     onSync?: (result: SyncResult) => void,
@@ -147,7 +190,7 @@ export class SyncManager {
       running = true;
       void this.sync()
         .then(async (result) => { await watchManager.reconcile(); onSync?.(result); })
-        .catch((cause: unknown) => onSync?.({ files: 0, inserted: 0, skipped: 0, diagnostics: [cause instanceof Error ? cause.message : "WATCH_SYNC_FAILED"] }))
+        .catch((cause: unknown) => onSync?.({ files: 0, changedRecords: 0, skippedFiles: 0, inserted: 0, skipped: 0, diagnostics: [cause instanceof Error ? cause.message : "WATCH_SYNC_FAILED"] }))
         .finally(() => { running = false; if (queued) { queued = false; schedule(); } });
     };
     const schedule = (): void => {

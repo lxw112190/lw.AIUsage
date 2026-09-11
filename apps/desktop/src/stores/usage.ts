@@ -23,6 +23,8 @@ import {
 } from "@lw-aiusage/application";
 import { JsonlWorkerParser } from "../workers/jsonlParser";
 
+export type SyncReason = "startup" | "manual" | "watch" | "rebuild";
+
 /** Runtime-only state. Page records live in usageRecords.ts. */
 export const useUsageStore = defineStore("runtime", () => {
   const repository = new DexieUsageRepository();
@@ -36,6 +38,9 @@ export const useUsageStore = defineStore("runtime", () => {
   const collectorStatuses = ref<CollectorDetectionResult[]>([]);
   const syncing = ref(false);
   const lastSync = ref<number>();
+  const lastCheckedAt = ref<number>();
+  const lastDataChangeAt = ref<number>();
+  const syncReason = ref<SyncReason>();
   const lastSyncResult = ref<SyncResult>();
   const syncProgress = ref<Pick<CollectorProgress, "source" | "current" | "total">>();
   const error = ref<string>();
@@ -46,6 +51,7 @@ export const useUsageStore = defineStore("runtime", () => {
   const codexAccountingAuditReport = ref<CodexAccountingAuditReport>();
   const rawAuditProgress = ref<{ current: number; total: number }>();
   const rawAuditBusy = ref(false);
+  let bootstrapped = false;
   let watchHandle: WatchHandle | undefined;
   const collectorVersions = Object.fromEntries(
     collectors.map((collector) => [collector.source, collector.parserVersion]),
@@ -61,12 +67,21 @@ export const useUsageStore = defineStore("runtime", () => {
   async function refreshCollectorStatuses(): Promise<void> {
     collectorStatuses.value = await detectCollectors(platform, collectors);
   }
-  async function handleWatchSync(watchResult: SyncResult): Promise<void> {
-    for (const message of watchResult.diagnostics)
+  function applySyncResult(result: SyncResult, reason: SyncReason, forceRevision = false): void {
+    const checkedAt = Date.now();
+    lastSyncResult.value = result;
+    lastSync.value = checkedAt;
+    lastCheckedAt.value = checkedAt;
+    syncReason.value = reason;
+    for (const message of result.diagnostics)
       diagnostics.add("WARN", message, "collector");
-    lastSyncResult.value = watchResult;
-    lastSync.value = Date.now();
-    if (watchResult.inserted > 0) dataRevision.value += 1;
+    if (forceRevision || result.changedRecords > 0) {
+      dataRevision.value += 1;
+      lastDataChangeAt.value = checkedAt;
+    }
+  }
+  async function handleWatchSync(watchResult: SyncResult): Promise<void> {
+    applySyncResult(watchResult, "watch");
   }
   async function startWatch(): Promise<void> {
     if (!watchHandle)
@@ -87,7 +102,7 @@ export const useUsageStore = defineStore("runtime", () => {
       }
       await repository.resetStatistics();
       const result = await manager.sync(trackSyncProgress);
-      lastSyncResult.value = result;
+      applySyncResult(result, "rebuild", true);
       const after = await audit.audit();
       rebuildAudit.value = {
         before,
@@ -100,11 +115,9 @@ export const useUsageStore = defineStore("runtime", () => {
             : 0,
         },
       };
-      dataRevision.value += 1;
       await refreshCollectorStatuses();
       await startWatch();
-      lastSync.value = Date.now();
-      diagnostics.add("INFO", `Usage rebuild complete: ${result.inserted} records changed`);
+      diagnostics.add("INFO", `Usage rebuild complete: ${result.changedRecords} records changed`);
     } catch (cause) {
       error.value = cause instanceof Error ? cause.message : "Rebuild failed";
       diagnostics.add("ERROR", error.value, "rebuild");
@@ -135,6 +148,9 @@ export const useUsageStore = defineStore("runtime", () => {
       codexAccountingAuditReport.value = undefined;
       lastSyncResult.value = undefined;
       lastSync.value = undefined;
+      lastCheckedAt.value = undefined;
+      lastDataChangeAt.value = undefined;
+      syncReason.value = undefined;
       dataRevision.value += 1;
       diagnostics.add("INFO", "Local usage data reset complete");
     } catch (cause) {
@@ -149,7 +165,7 @@ export const useUsageStore = defineStore("runtime", () => {
       syncing.value = false;
     }
   }
-  async function sync(): Promise<void> {
+  async function sync(reason: SyncReason = "manual"): Promise<void> {
     if (syncing.value || rawAuditBusy.value) return;
     syncing.value = true;
     error.value = undefined;
@@ -157,15 +173,11 @@ export const useUsageStore = defineStore("runtime", () => {
     try {
       await refreshCollectorStatuses();
       const result = await manager.sync(trackSyncProgress);
-      lastSyncResult.value = result;
-      for (const message of result.diagnostics)
-        diagnostics.add("WARN", message, "collector");
-      dataRevision.value += 1;
+      applySyncResult(result, reason);
       await refreshCollectorStatuses();
-      lastSync.value = Date.now();
       diagnostics.add(
         "INFO",
-        `Usage sync complete: ${result.inserted} changed records (${result.skipped} unchanged)`,
+        `Usage sync complete: ${result.changedRecords} changed records (${result.skippedFiles} unchanged)`,
       );
       await startWatch();
     } catch (cause) {
@@ -175,6 +187,11 @@ export const useUsageStore = defineStore("runtime", () => {
       syncing.value = false;
       syncProgress.value = undefined;
     }
+  }
+  async function bootstrap(): Promise<void> {
+    if (bootstrapped) return;
+    bootstrapped = true;
+    await sync("startup");
   }
   function exportDiagnostics(): void {
     const blob = new Blob([diagnostics.exportJson()], { type: "application/json" });
@@ -208,12 +225,7 @@ export const useUsageStore = defineStore("runtime", () => {
       }
       const report = await new CodexAccountingAuditService(platform, repository, async () => {
         const syncResult = await manager.sync();
-        lastSyncResult.value = syncResult;
-        lastSync.value = Date.now();
-        if (syncResult.inserted > 0) {
-          dataRevision.value += 1;
-          lastSync.value = Date.now();
-        }
+        applySyncResult(syncResult, "manual");
       }).audit((current, total) => {
         rawAuditProgress.value = { current, total };
       });
@@ -247,6 +259,9 @@ export const useUsageStore = defineStore("runtime", () => {
     collectorVersions,
     error,
     dataRevision,
+    lastCheckedAt,
+    lastDataChangeAt,
+    syncReason,
     rebuildAudit,
     auditReport,
     rawAuditReport,
@@ -254,6 +269,7 @@ export const useUsageStore = defineStore("runtime", () => {
     rawAuditProgress,
     rawAuditBusy,
     refreshCollectorStatuses,
+    bootstrap,
     sync,
     rebuild,
     resetLocalData,
