@@ -8,6 +8,8 @@ import { useOverviewStore } from "../stores/overview";
 import { useUsageStore } from "../stores/usage";
 import { useSettingsStore } from "../stores/settings";
 import { useI18n } from "../i18n";
+import { useRouter } from "vue-router";
+import { localDateKey } from "../usageRoute";
 import { formatTokenAmount, formatTokenDetail } from "../format";
 import type { ActivityCell, ActivityGranularity } from "@lw-aiusage/application";
 import type { PeriodComparison } from "@lw-aiusage/application";
@@ -17,6 +19,7 @@ const store = useOverviewStore();
 const runtime = useUsageStore();
 const settings = useSettingsStore();
 const { t, locale } = useI18n();
+const router = useRouter();
 const chartElement = ref<HTMLElement>();
 let chart: ECharts | undefined;
 const format = (value: number): string => formatTokenAmount(value, { locale: locale.value });
@@ -37,6 +40,8 @@ const comparisonText = (period: PeriodComparison): string => {
   const sign = period.changePercent > 0 ? "+" : "";
   return `${sign}${period.changePercent.toFixed(1)}%`;
 };
+function openPeriod(period: PeriodComparison["period"]): void { void router.push({ path: "/usage", query: { preset: period === "today" ? "today" : period === "week" ? "last7" : "thisMonth" } }); }
+function openAgent(source: string): void { void router.push({ path: "/usage", query: { source } }); }
 const trendModes: Array<{ value: ActivityGranularity; label: string }> = [
   { value: "daily", label: "overview.trendDaily" },
   { value: "weekly", label: "overview.trendWeekly" },
@@ -94,6 +99,14 @@ function renderChart(): void {
     yAxis: { type: "value", axisLabel: { formatter: (value: number) => formatTokenAmount(value, { locale: locale.value, decimals: 1 }) }, splitLine: { lineStyle: { color: "#eef0f4" } } },
     series: [{ type: "line", smooth: settings.activityGranularity === "cumulative", showSymbol: !["daily", "cumulative"].includes(settings.activityGranularity), data: trend.value.map((point) => point.value), symbol: "circle", symbolSize: 6, lineStyle: { width: 3, color: "#6957e8" }, itemStyle: { color: "#6957e8" }, areaStyle: settings.activityGranularity === "cumulative" ? { color: "rgba(105,87,232,.16)" } : undefined }],
   });
+  chart.off("click");
+  chart.on("click", (params) => {
+    if (!params || typeof params !== "object" || !("dataIndex" in params)) return;
+    const index = Number(params.dataIndex);
+    const point = trend.value[index];
+    if (!point) return;
+    void router.push({ path: "/usage", query: { from: localDateKey(point.cell.start), to: localDateKey(point.cell.end - 1), preset: "custom" } });
+  });
 }
 function resizeChart(): void { chart?.resize(); }
 onMounted(() => { void nextTick(renderChart); window.addEventListener("resize", resizeChart); });
@@ -110,17 +123,17 @@ watch(trend, () => { void nextTick(renderChart); });
       <div v-else class="health-meta"><span>{{ t("overview.filesScanned") }} <strong>{{ runtime.lastSyncResult?.files ?? 0 }}</strong></span><span>{{ t("overview.recordsChanged") }} <strong>{{ runtime.lastSyncResult?.inserted ?? 0 }}</strong></span><span>Codex Parser <strong>V{{ runtime.collectorVersions.codex }}</strong></span></div>
     </article>
     <div class="stats-grid">
-      <article class="stat-card primary"><span class="stat-label">{{ t("overview.totalTokens") }}</span><strong>{{ format(store.data.totalTokens) }}</strong><span class="stat-meta">{{ t("overview.allRecords") }}</span></article>
+      <article class="stat-card primary"><span class="stat-label">{{ t("overview.totalTokens") }}</span><strong>{{ format(store.data.totalTokens) }}</strong><span class="stat-meta">{{ t("overview.allRecords") }} · {{ t("overview.cachedShare") }} {{ store.data.cachedInputShare === undefined ? "—" : `${(store.data.cachedInputShare * 100).toFixed(1)}%` }}</span></article>
       <article class="stat-card"><span class="stat-label">{{ t("overview.usageRecords") }}</span><strong>{{ store.data.records.toLocaleString(locale === "zh" ? "zh-CN" : "en-US") }}</strong><span class="stat-meta">{{ t("overview.dedup") }}</span></article>
       <article class="stat-card"><span class="stat-label">{{ t("overview.activeAgents") }}</span><strong>{{ Object.keys(store.data.bySource).length }}</strong><span class="stat-meta">{{ t("overview.codexClaude") }}</span></article>
       <article class="stat-card"><span class="stat-label">{{ t("overview.estimatedCost") }}</span><strong>${{ store.data.estimatedCostUsd.toFixed(2) }}</strong><span class="stat-meta">{{ t("overview.publicRates") }}</span></article>
     </div>
     <div class="period-grid">
-      <article v-for="period in store.data.periods" :key="period.period" class="period-card"><span>{{ periodLabel(period.period) }}</span><strong>{{ format(period.currentTokens) }}</strong><div><small>{{ t("overview.previousComparable") }} {{ format(period.previousTokens) }}</small><em :class="{ positive: period.deltaTokens > 0, negative: period.deltaTokens < 0 }">{{ comparisonText(period) }}</em></div></article>
+      <article v-for="period in store.data.periods" :key="period.period" class="period-card clickable-card" @click="openPeriod(period.period)"><span>{{ periodLabel(period.period) }}</span><strong>{{ format(period.currentTokens) }}</strong><div><small>{{ t("overview.previousComparable") }} {{ format(period.previousTokens) }}</small><em :class="{ positive: period.deltaTokens > 0, negative: period.deltaTokens < 0 }">{{ comparisonText(period) }}</em></div></article>
     </div>
     <div class="content-grid">
       <article class="panel chart-panel"><div class="panel-heading trend-heading"><div><h2>{{ t("overview.tokenTrend") }}</h2><p>{{ t("overview.tokenTrendDescription") }}</p></div><div class="trend-modes"><button v-for="mode in trendModes" :key="mode.value" :class="{ active: settings.activityGranularity === mode.value }" @click="changeTrend(mode.value)">{{ t(mode.label) }}</button></div></div><div ref="chartElement" class="chart"></div><div v-if="!store.data.records" class="empty-overlay">{{ t("overview.emptyTrend") }}</div></article>
-      <article class="panel"><div class="panel-heading"><div><h2>{{ t("overview.agentBreakdown") }}</h2><p>{{ t("overview.tokensBySource") }}</p></div></div><div v-if="Object.keys(store.data.bySource).length" class="breakdown"><div v-for="(value, key) in store.data.bySource" :key="key" class="breakdown-row"><div><span class="agent-icon">{{ key === "codex" ? "C" : "A" }}</span><span>{{ key }}</span></div><strong>{{ format(value) }}</strong></div></div><div v-else class="empty-state">{{ t("overview.noAgentData") }}</div></article>
+      <article class="panel"><div class="panel-heading"><div><h2>{{ t("overview.agentBreakdown") }}</h2><p>{{ t("overview.tokensBySource") }}</p></div></div><div v-if="Object.keys(store.data.bySource).length" class="breakdown"><div v-for="(value, key) in store.data.bySource" :key="key" class="breakdown-row clickable-card" @click="openAgent(key)"><div><span class="agent-icon">{{ key === "codex" ? "C" : "A" }}</span><span>{{ key }}</span></div><strong>{{ format(value) }}</strong></div></div><div v-else class="empty-state">{{ t("overview.noAgentData") }}</div></article>
     </div>
   </section>
 </template>

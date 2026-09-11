@@ -1,8 +1,9 @@
-import { totalTokens, type UsageRecord } from "@lw-aiusage/core";
+import { estimatedCostUsd, pricingForModel, totalTokens, type UsageRecord } from "@lw-aiusage/core";
 
 const csvCell = (value: string | number): string => {
   const text = String(value);
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
+  return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 };
 
 export function usageRecordsToCsv(
@@ -12,6 +13,7 @@ export function usageRecordsToCsv(
   const rows: Array<Array<string | number>> = [[
     "time",
     "agent",
+    "session_id",
     "model",
     "project",
     "input_tokens",
@@ -20,11 +22,13 @@ export function usageRecordsToCsv(
     "output_tokens",
     "reasoning_output_tokens",
     "total_tokens",
+    "estimated_cost_usd",
   ]];
   for (const record of records) {
     rows.push([
       new Date(record.timestamp).toISOString(),
       record.source,
+      record.sessionId ?? "",
       record.model,
       projectName(record.projectKey),
       record.usage.inputTokens,
@@ -33,6 +37,7 @@ export function usageRecordsToCsv(
       record.usage.outputTokens,
       record.usage.reasoningOutputTokens,
       totalTokens(record.usage),
+      pricingForModel(record.model) ? estimatedCostUsd(record.usage, pricingForModel(record.model)!) : 0,
     ]);
   }
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");

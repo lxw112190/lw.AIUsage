@@ -41,6 +41,7 @@ export interface UsageQuery {
   source?: string;
   model?: string;
   projectKey?: string;
+  sessionId?: string;
 }
 export interface UsagePageQuery extends UsageQuery {
   page: number;
@@ -204,7 +205,8 @@ export class MemoryUsageRepository implements UsageRepository {
           (query.to === undefined || record.timestamp < query.to) &&
           (!query.source || record.source === query.source) &&
           (!query.model || record.model === query.model) &&
-          (!query.projectKey || record.projectKey === query.projectKey),
+          (!query.projectKey || record.projectKey === query.projectKey) &&
+          (!query.sessionId || record.sessionId === query.sessionId),
       )
       .sort((a, b) => a.timestamp - b.timestamp);
   }
@@ -218,7 +220,8 @@ export class MemoryUsageRepository implements UsageRepository {
           (query.to === undefined || record.timestamp < query.to) &&
           (!query.source || record.source === query.source) &&
           (!query.model || record.model === query.model) &&
-          (!query.projectKey || record.projectKey === query.projectKey),
+          (!query.projectKey || record.projectKey === query.projectKey) &&
+          (!query.sessionId || record.sessionId === query.sessionId),
       )
       .sort((left, right) => {
         const timestamp = left.timestamp - right.timestamp;

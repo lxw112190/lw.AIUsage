@@ -48,6 +48,14 @@ class AiUsageDatabase extends Dexie {
       projects: "key,lastActiveAt",
       sessions: "id,source,lastActiveAt",
     });
+    this.version(4).stores({
+      records:
+        "id,timestamp,source,model,projectKey,sourcePath,sessionId,[timestamp+id],[source+timestamp+id],[model+timestamp+id],[projectKey+timestamp+id],[sessionId+timestamp+id],[source+sessionId+timestamp+id]",
+      buckets: "id,bucketStart,source,model,projectKey",
+      cursors: "key,source,path,logicalId",
+      projects: "key,lastActiveAt",
+      sessions: "id,source,lastActiveAt",
+    });
   }
 }
 const matches = (
@@ -66,7 +74,8 @@ const matches = (
     (query.to === undefined || time < query.to) &&
     (!query.source || item.source === query.source) &&
     (!query.model || item.model === query.model) &&
-    (!query.projectKey || item.projectKey === query.projectKey)
+    (!query.projectKey || item.projectKey === query.projectKey) &&
+    (!query.sessionId || ("sessionId" in item && item.sessionId === query.sessionId))
   );
 };
 const recordsEqual = (left: UsageRecord, right: UsageRecord): boolean =>
@@ -199,17 +208,7 @@ export class DexieUsageRepository implements UsageRepository {
     return newCursor;
   }
   async getRecords(query: UsageQuery = {}): Promise<UsageRecord[]> {
-    const collection =
-      query.from !== undefined || query.to !== undefined
-        ? this.db.records
-            .where("timestamp")
-            .between(
-              query.from ?? Dexie.minKey,
-              query.to ?? Dexie.maxKey,
-              true,
-              false,
-            )
-        : this.db.records.toCollection();
+    const collection = this.recordCollection(query);
     return (await collection.toArray())
       .filter((item) => matches(query, item))
       .sort((a, b) => a.timestamp - b.timestamp);
@@ -314,6 +313,24 @@ export class DexieUsageRepository implements UsageRepository {
   private recordCollection(query: UsageQuery) {
     const from = query.from ?? Dexie.minKey;
     const to = query.to ?? Dexie.maxKey;
+    if (query.source && query.sessionId)
+      return this.db.records
+        .where("[source+sessionId+timestamp+id]")
+        .between(
+          [query.source, query.sessionId, from, Dexie.minKey],
+          [query.source, query.sessionId, to, Dexie.maxKey],
+          true,
+          false,
+        );
+    if (query.sessionId)
+      return this.db.records
+        .where("[sessionId+timestamp+id]")
+        .between(
+          [query.sessionId, from, Dexie.minKey],
+          [query.sessionId, to, Dexie.maxKey],
+          true,
+          false,
+        );
     if (query.projectKey)
       return this.db.records
         .where("[projectKey+timestamp+id]")

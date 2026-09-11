@@ -2,7 +2,7 @@ import { computed, shallowRef, ref, watch } from "vue";
 import { defineStore } from "pinia";
 import type { AgentSource, UsageRecord } from "@lw-aiusage/core";
 import { DexieUsageRepository, type UsagePageResult } from "@lw-aiusage/storage";
-import { QueryService } from "@lw-aiusage/application";
+import { QueryService, type UsageFilters } from "@lw-aiusage/application";
 import { useUsageStore } from "./usage";
 import { useProjectPreferencesStore } from "./projects";
 
@@ -31,6 +31,7 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
   const projectFilter = ref("");
   const fromDate = ref("");
   const toDate = ref("");
+  const sessionFilter = ref("");
   const modelOptions = ref<string[]>([]);
   const projectKeys = ref<string[]>([]);
   const projectOptions = computed(() => projectKeys.value
@@ -44,9 +45,10 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
     projectKey: projectFilter.value || undefined,
     from: toTimestamp(fromDate.value),
     to: toTimestamp(toDate.value, true),
+    sessionId: sessionFilter.value || undefined,
   });
 
-  async function loadPage(): Promise<void> {
+  async function loadPage(nextFilters?: UsageFilters): Promise<void> {
     const sequence = ++querySequence;
     loading.value = true;
     error.value = undefined;
@@ -55,7 +57,7 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
         page: page.value,
         pageSize: pageSize.value,
         order: "desc",
-        ...filters(),
+        ...(nextFilters ?? filters()),
       });
       if (sequence !== querySequence) return;
       items.value = result.items;
@@ -89,6 +91,7 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
     projectFilter.value = "";
     fromDate.value = "";
     toDate.value = "";
+    sessionFilter.value = "";
   }
   function setPage(value: number): void {
     page.value = Math.max(1, Math.min(value, totalPages.value));
@@ -100,7 +103,7 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
     page.value = 1;
     void loadPage();
   }
-  watch([sourceFilter, modelFilter, projectFilter, fromDate, toDate], () => {
+  watch([sourceFilter, modelFilter, projectFilter, fromDate, toDate, sessionFilter], () => {
     page.value = 1;
     void loadPage();
   });
@@ -109,10 +112,9 @@ export const useUsageRecordsStore = defineStore("usageRecords", () => {
     void loadOptions();
   });
   void loadOptions();
-  void loadPage();
   return {
     items, page, pageSize, pageSizeOptions, total, totalPages, loading, error,
-    sourceFilter, modelFilter, projectFilter, fromDate, toDate,
+    sourceFilter, modelFilter, projectFilter, fromDate, toDate, sessionFilter,
     modelOptions, projectOptions, loadPage, loadOptions, filteredRecords, clearFilters, setPage, setPageSize,
   };
 });

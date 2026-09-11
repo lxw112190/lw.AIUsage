@@ -2,9 +2,10 @@ import { ref, watch } from "vue";
 import { defineStore } from "pinia";
 import { DexieUsageRepository } from "@lw-aiusage/storage";
 import { QueryService, type ActivityGranularity, type ActivityViewData, type DashboardData } from "@lw-aiusage/application";
+import { zeroUsage } from "@lw-aiusage/core";
 import { useUsageStore } from "./usage";
 
-const emptyDashboard = (): DashboardData => ({ records: 0, totalTokens: 0, estimatedCostUsd: 0, bySource: {}, bySourceRecords: {}, trend: [], periods: [] });
+const emptyDashboard = (): DashboardData => ({ records: 0, totalTokens: 0, estimatedCostUsd: 0, usage: zeroUsage(), bySource: {}, bySourceRecords: {}, trend: [], periods: [] });
 export const useOverviewStore = defineStore("overview", () => {
   const runtime = useUsageStore();
   const service = new QueryService(new DexieUsageRepository());

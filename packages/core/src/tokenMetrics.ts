@@ -1,5 +1,14 @@
 import type { TokenUsage } from "./models";
 
+export function inputContextTokens(usage: TokenUsage): number {
+  return usage.inputTokens + usage.cachedInputTokens + usage.cacheCreationInputTokens;
+}
+
+export function cachedInputShare(usage: TokenUsage): number | undefined {
+  const total = inputContextTokens(usage);
+  return total > 0 ? usage.cachedInputTokens / total : undefined;
+}
+
 export interface TokenMetricSet {
   current: number;
   withoutCached: number;

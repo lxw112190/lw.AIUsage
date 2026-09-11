@@ -1,10 +1,13 @@
 import {
   addLocalDays,
+  addUsage,
+  cachedInputShare,
   estimatedCostUsd,
   pricingForModel,
   startOfLocalDay,
   startOfLocalWeek,
   totalTokens,
+  zeroUsage,
   type AgentSource,
   type UsageBucket,
   type UsageRecord,
@@ -40,6 +43,8 @@ export interface DashboardData {
   records: number;
   totalTokens: number;
   estimatedCostUsd: number;
+  usage: UsageRecord["usage"];
+  cachedInputShare?: number;
   bySource: Record<string, number>;
   bySourceRecords: Record<string, number>;
   trend: DashboardTrendPoint[];
@@ -61,6 +66,20 @@ export interface DashboardTrendPoint {
 export interface StatsData {
   byModel: UsageGroup[];
   byProject: UsageGroup[];
+}
+
+export interface AgentUsageSummary {
+  source: AgentSource;
+  recordCount: number;
+  sessionCount: number;
+  projectCount: number;
+  modelCount: number;
+  firstActiveAt?: number;
+  lastActiveAt?: number;
+  usage: UsageRecord["usage"];
+  totalTokens: number;
+  estimatedCostUsd: number;
+  cachedInputShare?: number;
 }
 
 const group = (
@@ -178,6 +197,7 @@ export class QueryService {
     let records = 0;
     let tokens = 0;
     let cost = 0;
+    let usage = zeroUsage();
     for (const bucket of buckets) {
       const bucketTokens = totalTokens(bucket.usage);
       records += bucket.recordCount;
@@ -186,11 +206,14 @@ export class QueryService {
       bySourceRecords[bucket.source] = (bySourceRecords[bucket.source] ?? 0) + bucket.recordCount;
       const pricing = pricingForModel(bucket.model);
       if (pricing) cost += estimatedCostUsd(bucket.usage, pricing);
+      usage = addUsage(usage, bucket.usage);
     }
     return {
       records,
       totalTokens: tokens,
       estimatedCostUsd: cost,
+      usage,
+      ...(cachedInputShare(usage) === undefined ? {} : { cachedInputShare: cachedInputShare(usage) }),
       bySource,
       bySourceRecords,
       trend: dailyUsageFromBuckets(buckets).map(({ day, timestamp, totalTokens }) => ({ day, timestamp, totalTokens })),
@@ -203,6 +226,44 @@ export class QueryService {
       byModel: bucketGroup(buckets, (bucket) => bucket.model),
       byProject: bucketGroup(buckets, (bucket) => bucket.projectKey),
     };
+  }
+  async agentSummaries(): Promise<AgentUsageSummary[]> {
+    const records = await this.repository.getRecords();
+    const grouped = new Map<AgentSource, AgentUsageSummary>();
+    for (const record of records) {
+      const current = grouped.get(record.source);
+      const pricing = pricingForModel(record.model);
+      if (current) {
+        current.recordCount += 1;
+        current.usage = addUsage(current.usage, record.usage);
+        current.totalTokens += totalTokens(record.usage);
+        current.estimatedCostUsd += pricing ? estimatedCostUsd(record.usage, pricing) : 0;
+        current.firstActiveAt = Math.min(current.firstActiveAt ?? record.timestamp, record.timestamp);
+        current.lastActiveAt = Math.max(current.lastActiveAt ?? record.timestamp, record.timestamp);
+      } else {
+        grouped.set(record.source, {
+          source: record.source,
+          recordCount: 1,
+          sessionCount: 0,
+          projectCount: 0,
+          modelCount: 0,
+          firstActiveAt: record.timestamp,
+          lastActiveAt: record.timestamp,
+          usage: addUsage(zeroUsage(), record.usage),
+          totalTokens: totalTokens(record.usage),
+          estimatedCostUsd: pricing ? estimatedCostUsd(record.usage, pricing) : 0,
+        });
+      }
+    }
+    for (const summary of grouped.values()) {
+      const sourceRecords = records.filter((record) => record.source === summary.source);
+      summary.sessionCount = new Set(sourceRecords.flatMap((record) => record.sessionId ? [record.sessionId] : [])).size;
+      summary.projectCount = new Set(sourceRecords.map((record) => record.projectKey)).size;
+      summary.modelCount = new Set(sourceRecords.map((record) => record.model)).size;
+      const share = cachedInputShare(summary.usage);
+      if (share !== undefined) summary.cachedInputShare = share;
+    }
+    return [...grouped.values()].sort((left, right) => right.totalTokens - left.totalTokens);
   }
   async activity(granularity: ActivityGranularity): Promise<ActivityViewData> {
     return new ActivityService(this.repository).activity(granularity);

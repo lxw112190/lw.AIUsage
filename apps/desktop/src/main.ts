@@ -13,6 +13,7 @@ const router = createRouter({
   routes: [
     { path: "/", component: () => import("./pages/Overview.vue") },
     { path: "/usage", component: () => import("./pages/Usage.vue") },
+    { path: "/sessions", component: () => import("./pages/Sessions.vue") },
     { path: "/stats", component: () => import("./pages/Stats.vue") },
     { path: "/agents", component: () => import("./pages/Agents.vue") },
     { path: "/settings", component: () => import("./pages/Settings.vue") },

@@ -9,3 +9,4 @@ export * from "./codexRawAudit";
 export * from "./codexAccountingAudit";
 export * from "./activity";
 export * from "./dailyUsage";
+export * from "./sessionUsage";
